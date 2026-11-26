@@ -6,15 +6,15 @@ contracts, payments, installments, expenses, refunds, staff tasks,
 notifications, file management, search, dashboards, reports, a calendar,
 manual backup/restore, and an Owner settings screen.
 
-**Status: ALL 7 PHASES COMPLETE** (final phase, Phase 7, finished
-2026-11-26). The app starts, the database initialises at schema v4,
-all 5 demo accounts can log in, and every feature is verified by tests
-(**317 unittest + 3 console tests, all passing**). Final traceability:
-64 of 68 functional requirements implemented and verified, 2 Partial
-(documented limitations the SRS itself anticipates), 2 Deferred
-(FR-026 post-confirmation service changes, FR-029 scheduling advisory);
-22 of 22 SRS §21 tests implemented and verified; 12 of 12 deck
-requirements met.
+**Status: ALL 7 PHASES + PHASE 8 COMPLETE** (final phase, Phase 7,
+finished 2026-11-26; follow-up Phase 8 — the remaining Partial/Deferred
+items plus full Arabic — finished 2026-11-27). The app starts, the
+database initialises at schema v5, all 5 demo accounts can log in, and
+every feature is verified by tests (**351 unittest + 3 console tests,
+all passing**). Final traceability: 68 of 68 functional requirements
+implemented and verified, 16 of 16 non-functional requirements,
+25 of 25 business rules enforced; 22 of 22 SRS §21 tests implemented
+and verified; 12 of 12 deck requirements met.
 
 Solo project by Ahmed Ashraf Elassal, Faculty of Computers and
 Artificial Intelligence, Benha University. This is a fresh solo restart
@@ -27,8 +27,12 @@ Artificial Intelligence, Benha University. This is a fresh solo restart
 - SQLite via the standard-library `sqlite3` module — no database server
 - Gradio for the browser UI (the instructor deck's pattern: browser
   screens with `gr.Info` / `gr.Error`; see `docs/GAP_ANALYSIS.md` G-04)
-- `requirements.txt` contains only `gradio>=5,<7` — no other frameworks.
-  No React / Django / Flask / MongoDB / cloud.
+- `requirements.txt` contains `gradio>=5,<7` and
+  `cryptography>=50,<51` — no other frameworks. No React / Django /
+  Flask / MongoDB / cloud. `cryptography` (Fernet, AES-128-CBC +
+  HMAC-SHA256) is the vetted library used for field-level encryption
+  of National IDs (FR-014, Phase 8); the key is never committed and
+  never stored in the database — see "Encryption key" below.
 
 ## Quick start (Windows)
 
@@ -38,6 +42,8 @@ cd IS_Project
 py -m venv .venv
 .venv\Scripts\activate
 pip install -r requirements.txt
+python scripts/generate_encryption_key.py   # prints ONE key — save it
+$env:WEDDING_HALL_ENCRYPTION_KEY = "<the key you just generated>"
 python main.py
 ```
 
@@ -72,7 +78,37 @@ python main.py --host 0.0.0.0 --port 7866
 Environment variables: `GRADIO_SERVER_NAME` (default `127.0.0.1`),
 `GRADIO_SERVER_PORT` (default `7860`), `WEDDING_HALL_DB`,
 `WEDDING_HALL_VENUE`, `WEDDING_HALL_CURRENCY`, `WEDDING_HALL_TZ`,
-`WEDDING_HALL_LANG`.
+`WEDDING_HALL_LANG`, `WEDDING_HALL_ENCRYPTION_KEY` (required — see
+below), `WEDDING_HALL_BROWSER_SECRET` (optional — see "Remember Me"
+below).
+
+## Encryption key (FR-014, Phase 8)
+
+Customer National IDs are encrypted at rest with Fernet
+(`cryptography`). The key comes from the environment variable
+`WEDDING_HALL_ENCRYPTION_KEY` — it is **never committed and never
+stored in the database**. Generate one before the first run:
+
+```text
+python scripts/generate_encryption_key.py   # prints one key + setup instructions
+```
+
+- Windows (current shell): `$env:WEDDING_HALL_ENCRYPTION_KEY = "<key>"`
+  (permanent: `setx WEDDING_HALL_ENCRYPTION_KEY "<key>"`, then restart
+  the shell); Linux/macOS: `export WEDDING_HALL_ENCRYPTION_KEY="<key>"`.
+- If the key is missing or invalid, the app **refuses to start the
+  encryption path** with a clear message instead of silently storing
+  plaintext (fail loudly, never fall back). Existing stored National
+  IDs are encrypted in place by migration 005, which validates
+  decrypt-after-encrypt per row.
+- **Losing the key loses the National IDs** — back it up somewhere
+  safe (password manager), separate from the database. Without it the
+  data cannot be recovered.
+- Phone and email are NOT encrypted (SRS §2.4 names the National ID);
+  they stay protected by RBAC and masking, exactly as before.
+- Note: the demo database on the development VM was encrypted with a
+  test-only key; it holds example data only. A fresh clone must
+  generate its own key before first launch.
 
 **LAN deployment (SRS §16.4):** one central computer runs Python +
 Gradio + SQLite; employee devices use a browser over the venue LAN.
@@ -85,10 +121,11 @@ Verified on this VM: loopback HTTP 200 in ~10 s, LAN mode HTTP 200 in
 
 ## Features (by phase)
 
-- **Phase 1 — Foundation:** 54-table schema (v4), roles/permissions as
-  data (5 roles, 41 permissions, least privilege), PBKDF2 auth with
-  lockout (5 fails / 15 min), hashed session tokens, audit log,
-  Owner/Manager/Receptionist/Accountant/Staff demo accounts.
+- **Phase 1 — Foundation:** 56-table schema (v5 after Phase 8),
+  roles/permissions as data (5 roles, 42 permissions, least
+  privilege), PBKDF2 auth with lockout (5 fails / 15 min), hashed
+  session tokens, audit log, Owner/Manager/Receptionist/Accountant/
+  Staff demo accounts.
 - **Phase 2 — Halls, catalog, pricing:** hall CRUD (deactivate, never
   hard delete), weekly hours (multi-interval) + exceptional hours/
   closures, maintenance blocks, event types, packages, services,
@@ -131,6 +168,37 @@ Verified on this VM: loopback HTTP 200 in ~10 s, LAN mode HTTP 200 in
   diagrams (`docs/diagrams/`), README/SRS/traceability updates,
   2-minute demo script (`docs/DEMO_SCRIPT.md`), Owner settings screen,
   calendar (see below).
+- **Phase 8 — Remaining items + full Arabic:** Remember Me (FR-011,
+  see below), National ID field-level encryption (FR-014, see above),
+  post-confirmation service changes (FR-026: re-price, delta recorded,
+  increase becomes outstanding with a due date, decrease creates a
+  pending refund — never auto-paid — new contract version only when
+  the total changes), scheduling advisory (FR-029: nearest feasible
+  alternatives with a plain-language reason each, advisory only,
+  never an automatic change), and full Arabic across the whole project
+  (NFR-005: every label, tab title, button, message, notification,
+  report and contract template switches with the language toggle;
+  Arabic stays the default; 1,295+ i18n keys, identical in both
+  languages — `tests/test_phase8.py` checks parity and that the
+  toggle executes and switches tab titles and button text both ways).
+
+## Remember Me (FR-011, Phase 8)
+
+Login has a "Remember me on this device (30 days)" checkbox. When
+checked, the server issues a random opaque token, stores only its
+SHA-256 hash (30-day expiry, at most 3 live tokens per employee,
+oldest revoked first), and hands it to the browser via Gradio
+`BrowserState` (browser localStorage). On the next visit the token is
+validated and **rotated** (a fresh token replaces it; the old one
+dies), a new session is opened and the user is signed in. The token
+is revoked on logout and on any password change/reset or account
+deactivation. The password is never stored on the client. The
+BrowserState secret is only obfuscation for localStorage — the real
+security is server-side; set `WEDDING_HALL_BROWSER_SECRET` to a
+stable secret if you want "Remember Me" to survive a server restart
+(without it, Gradio generates a fresh secret per process and a restart
+simply asks the user to log in again). Without Remember Me, sessions
+still last up to 8 h as before.
 
 ## Backup and restore (Owner only, `backup.manage`)
 
@@ -185,7 +253,7 @@ database; the demo database is never modified).
 
 ```powershell
 python tests/test_console.py              # deck's 3 console cases incl. bad input → 3/3 PASS
-python -m unittest discover -s tests      # full suite → 317 tests, OK
+python -m unittest discover -s tests      # full suite → 351 tests, OK
 ```
 
 Every test uses a temporary database (never the real app database).
@@ -194,8 +262,9 @@ Test files: `test_auth.py`, `test_permissions.py`, `test_database.py`,
 `test_quotations.py`, `test_bookings.py`, `test_contracts.py`,
 `test_tasks.py`, `test_notifications.py`, `test_finance.py`,
 `test_files_search_reports.py`, `test_i18n.py`, `test_backup.py`,
-`test_settings.py`, `test_calendar.py`, plus `test_console.py`.
-Test counts by phase: 34 + 44 + 66 + 35 + 51 + 47 + 40 = 317.
+`test_settings.py`, `test_calendar.py`, `test_phase8.py`, plus
+`test_console.py`.
+Test counts by phase: 34 + 44 + 66 + 35 + 51 + 47 + 40 + 34 = 351.
 
 **2-minute demo:** `docs/DEMO_SCRIPT.md` — a timed script (Owner login
 → dashboard → price calculator → quotation accept + convert → deposit
@@ -208,12 +277,13 @@ re-seed, or restore a pre-demo backup.
 
 ```text
 main.py                    Thin launcher: python main.py [--lan] [--host] [--port]
-requirements.txt           gradio only (stdlib otherwise)
+requirements.txt           gradio + cryptography (stdlib otherwise)
 wedding_hall_system/
   __main__.py              CLI + offline env vars (GRADIO_ANALYTICS_ENABLED=False, HF_HUB_OFFLINE=1)
   config/                  settings.py (AppSettings, env overrides), defaults.py (seed data)
   data/                    database.py (DatabaseManager), schema.sql, seed.py,
-                           migrations/ (001–004), repositories/ (one per aggregate)
+                           migrations/ (001–005), migrations_py.py (Python migration steps),
+                           repositories/ (one per aggregate)
   logic/                   models.py, permissions.py, auth_service.py,
                            audit_service.py, hall_service.py,
                            catalog_service.py, availability_service.py, pricing_service.py,
@@ -222,18 +292,19 @@ wedding_hall_system/
                            notification_service.py, payment_service.py, expense_service.py,
                            refund_service.py, report_service.py, search_service.py,
                            attachment_service.py, calendar_service.py, backup_service.py,
-                           settings_service.py, preferences.py
+                           settings_service.py, preferences.py, strings.py
   ui/                      app.py, auth_views.py, catalog_views.py, booking_views.py,
                            operations_views.py, finance_views.py, dashboard_views.py,
                            search_views.py, files_views.py, reports_views.py,
                            calendar_views.py, backup_views.py, settings_views.py,
                            i18n.py, components/
-  utils/                   exceptions.py (12 custom exception types),
-                           logging_config.py (secret redaction), validators.py
+  utils/                   exceptions.py (13 custom exception types incl. ConfigurationError),
+                           logging_config.py (secret redaction), validators.py,
+                           crypto.py (Fernet field-level encryption)
 storage/                   contracts/, uploads/, backups/ (contents git-ignored)
-data/                      wedding_hall.db (created on first run; schema v4)
+data/                      wedding_hall.db (created on first run; schema v5)
 tests/                     conftest.py, test_console.py, test_*.py (see Tests above)
-scripts/                   perf_check.py
+scripts/                   perf_check.py, generate_encryption_key.py
 docs/                      REQUIREMENT_TRACEABILITY_MATRIX.md, GAP_ANALYSIS.md,
                            ARCHITECTURE_REVIEW.md, ASSUMPTIONS_AND_DECISIONS.md,
                            SRS.md (as-built), DEMO_SCRIPT.md, PERFORMANCE.md,
@@ -261,17 +332,13 @@ with the hall.
   No PDF/Excel report export either (CSV is the mandatory academic export).
 - **Backup covers the database only** (A-62) — see above.
 - **Calendar is a table view, not drag-and-drop** (A-61) — see above.
-- **Bilingual UI is partial** (A-55): Arabic/English with RTL/LTR
-  covers the Phase 6 screens, the login/welcome chrome and all dynamic
-  content; the static form labels of the Phase 1–5 screens stay English.
 - **Hall utilization is an upper bound** (A-54): it counts weekly-
   schedule hours only; exceptional closures are not subtracted.
-- **No "Remember Me"** (A-09) and **no field-level encryption** (A-08):
-  both are documented limitations the SRS anticipates (omit + document);
-  sessions last up to 8 h, and sensitive data is protected by RBAC,
-  masking and never logging secrets.
-- **Deferred, not built:** FR-026 post-confirmation service changes
-  and FR-029 scheduling advisory (A-66) — pending a scope decision.
+- **Scheduling advisory is advisory only** (A-73): it suggests
+  alternatives and never changes a booking; shorter-duration
+  suggestions never go below the package minimum.
+- **Service changes need a Confirmed booking** (A-69): an in-progress
+  event is being delivered, not re-priced.
 - Hold expiry and the task-due sweep are **lazy** (no background
   process): they run when the relevant screen is opened.
 - Datetimes are stored as naive local ISO strings in venue time
@@ -293,8 +360,7 @@ stated in the deck — it coincides with an old GitHub invite expiry.
 
 - `docs/SRS.md` — as-built software requirements (sections 0–26)
 - `docs/REQUIREMENT_TRACEABILITY_MATRIX.md` — final counts: AC 12/12,
-  FR 64 implemented + 2 Partial + 2 Deferred, NFR 15 + 1 Partial,
-  BR 24 enforced + 1 Deferred, T 22/22
+  FR 68/68 implemented and verified, NFR 16/16, BR 25/25, T 22/22
 - `docs/ARCHITECTURE_REVIEW.md`, `docs/GAP_ANALYSIS.md`,
-  `docs/ASSUMPTIONS_AND_DECISIONS.md` (A-01–A-67)
+  `docs/ASSUMPTIONS_AND_DECISIONS.md` (A-01–A-80)
 - `docs/DEMO_SCRIPT.md`, `docs/PERFORMANCE.md`, `docs/diagrams/`

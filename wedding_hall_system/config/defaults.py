@@ -83,6 +83,7 @@ PERMISSIONS: dict[str, str] = {
     "booking.cancel": "Request/approve booking cancellation.",
     "booking.reschedule": "Reschedule bookings.",
     "booking.transfer": "Transfer a booking to another customer.",
+    "booking.change_services": "Change services on a Confirmed booking (re-price, record delta).",
     # Contracts / operations
     "contract.manage": "Generate and manage contracts.",
     "contract.view": "View contracts.",
@@ -116,6 +117,7 @@ ROLE_PERMISSIONS: dict[str, list[str]] = {
         "customer.create", "customer.view", "quotation.create", "quotation.view",
         "booking.create", "booking.view", "booking.view_price", "booking.update",
         "booking.cancel", "booking.reschedule", "booking.transfer",
+        "booking.change_services",
         "contract.manage", "contract.view",
         "task.manage", "task.view", "task.view_assigned", "task.update_own",
         "user.manage",
@@ -286,6 +288,7 @@ DEFAULT_NOTIFICATION_CONFIG: dict[str, dict] = {
     "hold_expiring": {"roles": ["Manager", "Receptionist"], "priority": "high"},
     "booking_cancelled": {"roles": ["Manager"], "priority": "normal"},
     "booking_rescheduled": {"roles": ["Manager"], "priority": "normal"},
+    "booking_services_changed": {"roles": ["Manager"], "priority": "normal"},
     "payment_received": {"roles": ["Accountant", "Manager"], "priority": "normal"},
     "installment_due": {"roles": ["Accountant"], "priority": "normal"},
     "event_approaching": {"roles": ["Manager"], "priority": "normal"},
@@ -350,6 +353,56 @@ refund policy; the original payment records are preserved.</p>
 <h2>5. Signatures</h2>
 <div class="sig"><div>Venue representative<br><br>Date: __________</div>
 <div>Customer: {{customer_name}}<br><br>Date: __________</div></div>
+</body></html>""",
+    # Arabic mirror of the body above (Phase 8, NFR-005): same
+    # placeholders, RTL. Used when the generating employee's language
+    # is Arabic; the English body stays the default.
+    "body_ar": """<!DOCTYPE html>
+<html lang="ar" dir="rtl"><head><meta charset="utf-8">
+<title>عقد حجز قاعة أفراح {{contract_number}}</title>
+<style>body{font-family:Arial,sans-serif;margin:40px;color:#222}
+h1{font-size:22px}h2{font-size:16px;margin-top:24px}
+table{border-collapse:collapse;width:100%}
+td,th{border:1px solid #ccc;padding:8px;text-align:right}
+.sig{margin-top:48px;display:flex;justify-content:space-between}
+.sig div{width:45%;border-top:1px solid #000;padding-top:6px}
+</style></head><body>
+<h1>عقد حجز قاعة أفراح &mdash; {{contract_number}}</h1>
+<p>التاريخ: {{date}} &nbsp;|&nbsp; القاعة: {{venue_name}}</p>
+<h2>1. الطرفان</h2>
+<p><strong>القاعة:</strong> {{venue_name}}<br>
+<strong>العميل:</strong> {{customer_name}}<br>
+الهاتف: {{customer_phone}}<br>
+العنوان: {{customer_address}}<br>
+الرقم القومي: {{customer_national_id}}</p>
+<h2>2. الحدث</h2>
+<table>
+<tr><th>القاعة</th><td>{{hall_name}}</td></tr>
+<tr><th>نوع الحدث</th><td>{{event_type}}</td></tr>
+<tr><th>الباقة</th><td>{{package_name}}</td></tr>
+<tr><th>التاريخ</th><td>{{event_date}}</td></tr>
+<tr><th>الوقت</th><td>{{event_start}} &ndash; {{event_end}}</td></tr>
+<tr><th>الضيوف</th><td>{{guest_count}}</td></tr>
+<tr><th>الحجز</th><td>{{booking_number}}</td></tr>
+</table>
+<h2>3. الشروط المالية</h2>
+<table>
+<tr><th>المبلغ الإجمالي</th><td>{{total_amount}}</td></tr>
+<tr><th>المقدم المطلوب ({{deposit_percent}}%)</th><td>{{deposit_required}}</td></tr>
+<tr><th>المقدم المدفوع</th><td>{{deposit_paid}}</td></tr>
+<tr><th>المتبقي</th><td>{{outstanding}}</td></tr>
+</table>
+<p>يُحفظ الحجز لمدة {{hold_hours}} ساعة؛ ويسدد مقدم بنسبة
+{{deposit_percent}}% لتأكيد الحجز. وإذا لم يُسجَّل المقدم بنهاية
+فترة الحفظ مضافًا إليها فترة السماح البالغة {{grace_hours}} ساعة، ينتهي
+الحجز ويُحرَّر الوقت.</p>
+<h2>4. الإلغاء والاسترداد</h2>
+<p>يخضع الإلغاء لسياسة القاعة السارية عند التأكيد.
+وتقتصر الاستردادات، إن وُجدت، على المبالغ المدفوعة فعلًا وتتبع
+سياسة الاسترداد؛ وتُحفظ سجلات الدفع الأصلية.</p>
+<h2>5. التوقيعات</h2>
+<div class="sig"><div>ممثل القاعة<br><br>التاريخ: __________</div>
+<div>العميل: {{customer_name}}<br><br>التاريخ: __________</div></div>
 </body></html>""",
 }
 

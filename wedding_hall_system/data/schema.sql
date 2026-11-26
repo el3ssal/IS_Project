@@ -92,6 +92,7 @@ CREATE TABLE IF NOT EXISTS customers (
     email_normalized TEXT NOT NULL DEFAULT '',
     address TEXT NOT NULL DEFAULT '',
     national_id TEXT NOT NULL DEFAULT '',
+    national_id_hash TEXT NOT NULL DEFAULT '',
     notes TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -570,6 +571,7 @@ CREATE TABLE IF NOT EXISTS notifications (
     type TEXT NOT NULL,
     title TEXT NOT NULL,
     body TEXT NOT NULL DEFAULT '',
+    data_json TEXT NOT NULL DEFAULT '{}',
     priority TEXT NOT NULL DEFAULT 'normal'
         CHECK (priority IN ('low', 'normal', 'high', 'urgent')),
     entity_type TEXT NOT NULL DEFAULT '',
@@ -604,6 +606,37 @@ CREATE TABLE IF NOT EXISTS backup_records (
     created_by INTEGER REFERENCES employees(id),
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     validated_at TEXT
+);
+
+-- ---------------------------------------------------------------- remember-me
+-- Phase 8, FR-011: persistent login tokens. Only the SHA-256 hash is
+-- stored; the raw token lives only in the user's browser storage.
+CREATE TABLE IF NOT EXISTS remember_me_tokens (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    employee_id INTEGER NOT NULL REFERENCES employees(id),
+    token_hash TEXT NOT NULL UNIQUE,
+    expires_at TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- ------------------------------------------------------- service changes
+-- Phase 8, FR-026 / BR-13: post-confirmation service changes, with the
+-- old/new selections and prices, the delta, and the contract action.
+CREATE TABLE IF NOT EXISTS booking_service_changes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    booking_id INTEGER NOT NULL REFERENCES bookings(id),
+    employee_id INTEGER REFERENCES employees(id),
+    old_services_json TEXT NOT NULL DEFAULT '[]',
+    new_services_json TEXT NOT NULL DEFAULT '[]',
+    old_total INTEGER NOT NULL DEFAULT 0,
+    new_total INTEGER NOT NULL DEFAULT 0,
+    delta INTEGER NOT NULL DEFAULT 0,
+    due_at TEXT,
+    refund_id INTEGER REFERENCES refunds(id),
+    contract_action TEXT NOT NULL DEFAULT 'note'
+        CHECK (contract_action IN ('note', 'new_version')),
+    reason TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE IF NOT EXISTS schema_version (

@@ -1,4 +1,6 @@
-"""Customers, quotations and bookings screens (Phase 3, presentation tier).
+"""Customers, quotations and bookings screens (Phase 3, presentation tier;
+Phase 8: fully bilingual, SRS §16.3; FR-026 service changes, FR-029
+scheduling advisory).
 
 Thin UI only: parse input, call ONE service method, render the result.
 No SQL and no business rules here. Every handler resolves the session
@@ -27,36 +29,73 @@ from ..logic.quotation_service import QuotationService
 from ..utils.exceptions import ApplicationError
 from ..utils.logging_config import get_logger
 from ..utils.validators import egp_to_piasters, parse_iso_datetime
+from .i18n import LabelRegistry, format_advisory_reason, lang_for_token, t, translate_price_label
 
 logger = get_logger(__name__)
 
+BOOKING_STATUS_KEYS = {
+    "pending": "booking.status_pending",
+    "confirmed": "booking.status_confirmed",
+    "in_progress": "booking.status_in_progress",
+    "completed": "booking.status_completed",
+    "cancelled": "booking.status_cancelled",
+    "no_show": "booking.status_no_show",
+    "expired": "booking.status_expired",
+    "draft": "booking.status_draft",
+    "sent": "booking.status_sent",
+    "accepted": "booking.status_accepted",
+    "reversed": "booking.status_reversed",
+}
+INTER_TYPE_KEYS = {
+    "call": "booking.inter_call", "inquiry": "booking.inter_inquiry",
+    "quotation": "booking.inter_quotation", "booking": "booking.inter_booking",
+    "cancellation": "booking.inter_cancellation",
+    "payment": "booking.inter_payment", "contract": "booking.inter_contract",
+    "note": "booking.inter_note",
+}
+PAY_METHOD_KEYS = {
+    "cash": "booking.method_cash", "bank_transfer": "booking.method_bank_transfer",
+    "visa_card": "booking.method_visa_card", "instapay": "booking.method_instapay",
+    "other": "booking.method_other",
+}
+DUP_MATCH_KEYS = {
+    "phone": "booking.dup_phone", "national_id": "booking.dup_national",
+    "email": "booking.dup_email",
+}
 
-def _md_table(headers: list[str], rows: list[list[str]]) -> str:
+
+def _md_table(headers: list[str], rows: list[list[str]], lang: str) -> str:
     if not rows:
-        return "_No records yet._"
+        return f"_{t(lang, 'common.no_records')}_"
     out = ["| " + " | ".join(headers) + " |",
            "| " + " | ".join("---" for _ in headers) + " |"]
     out += ["| " + " | ".join(str(c) for c in row) + " |" for row in rows]
     return "\n".join(out)
 
 
-def _hold_countdown(booking) -> str:
-    """Remaining hold time for a Pending booking, e.g. '31h 12m left'."""
+def _hold_countdown(booking, lang: str) -> str:
+    """Remaining hold time for a Pending booking."""
     if booking.status != "pending":
         return "—"
     if booking.hold_expires_at is None:
-        return "no hold set"
+        return t(lang, "booking.msg_hold_no")
     seconds = int((booking.hold_expires_at - datetime.now()).total_seconds())
     if seconds <= 0:
-        return "hold expired"
+        return t(lang, "booking.msg_hold_expired")
     hours, rem = divmod(seconds, 3600)
-    return f"{hours}h {rem // 60}m left"
+    return t(lang, "booking.msg_hold_left").format(h=hours, m=rem // 60)
+
+
+def _status(lang: str, status: str) -> str:
+    return t(lang, BOOKING_STATUS_KEYS.get(status, "booking.status_pending"))
 
 
 def build_booking_ui(db: DatabaseManager, auth: AuthService,
-                     settings: AppSettings, session_token) -> None:
+                     settings: AppSettings, session_token) -> dict:
     """Build the Customers / Quotations / Bookings tabs. Must be called
-    inside a gr.Blocks context, after the login/main views exist."""
+    inside a gr.Blocks context, after the login/main views exist.
+    Returns the LabelRegistry result for the language toggle."""
+    reg = LabelRegistry()
     customers = CustomerService(db, settings)
     quotations = QuotationService(db, settings)
     bookings = BookingService(db, settings)
@@ -64,10 +103,13 @@ def build_booking_ui(db: DatabaseManager, auth: AuthService,
     catalog = CatalogService(db, settings)
     availability = AvailabilityService(db, settings)
 
+    def _lang(token) -> str:
+        return lang_for_token(db, auth, token)
+
     def employee(token):
         emp = auth.validate_session(token)
         if emp is None:
-            raise gr.Error("Your session has expired. Please log in again.")
+            raise gr.Error(t(_lang(token), "login.session_expired"))
         return emp
 
     def _system_employee():
@@ -75,16 +117,8 @@ def build_booking_ui(db: DatabaseManager, auth: AuthService,
         return Employee(id=int(row["id"]), username="owner", full_name="Owner")
 
     def _hall_choices():
-        return [(f"{h.name} (cap {h.capacity})", h.id)
+        return [(f"{h.name} — {h.capacity}", h.id)
                 for h in halls.list_halls(_system_employee(), include_inactive=True)]
-
-    def _package_choices():
-        return [("No package", None)] + [
-            (p.name, p.id) for p in catalog.list_packages(_system_employee())]
-
-    def _type_choices():
-        return [("Any", None)] + [
-            (t.name, t.id) for t in halls.list_event_types(_system_employee())]
 
     def _service_choices():
         return [(s.name, s.id) for s in catalog.list_services(_system_employee())]
@@ -95,50 +129,60 @@ def build_booking_ui(db: DatabaseManager, auth: AuthService,
         return start_dt, end_dt
 
     # ============================================================== CUSTOMERS
-    with gr.Tab("Customers"):
-        gr.Markdown("### Customers — National IDs are masked unless your role "
-                    "may see them. Example customers are marked **(example)**.")
+    with reg.tab("tab.customers"):
+        reg.markdown("booking.customers_heading")
         cust_list = gr.Markdown("")
-        refresh_cust_btn = gr.Button("Refresh customers")
-        cust_search = gr.Textbox(label="Search (name / phone / email)")
+        refresh_cust_btn = reg.button("booking.refresh_customers")
+        cust_search = reg.textbox("booking.search")
         with gr.Row():
-            cust_name = gr.Textbox(label="Full name")
-            cust_phone = gr.Textbox(label="Primary phone", placeholder="01012345678")
-            cust_email = gr.Textbox(label="Email")
+            cust_name = reg.textbox("booking.cust_name")
+            cust_phone = reg.textbox("booking.cust_phone", placeholder="01012345678")
+            cust_email = reg.textbox("booking.cust_email")
         with gr.Row():
-            cust_address = gr.Textbox(label="Address")
-            cust_national = gr.Textbox(label="National ID (sensitive)")
-            cust_notes = gr.Textbox(label="Internal notes")
-        cust_force = gr.Checkbox(
-            label="Create anyway — I reviewed the possible duplicate warning",
-            value=False)
-        cust_create_btn = gr.Button("Create customer", variant="primary")
+            cust_address = reg.textbox("booking.cust_address")
+            cust_national = reg.textbox("booking.cust_national")
+            cust_notes = reg.textbox("booking.cust_notes")
+        cust_force = reg.checkbox("booking.cust_force", value=False)
+        cust_create_btn = reg.button("booking.create_customer", variant="primary")
         cust_dup = gr.Markdown("")
-        gr.Markdown("#### Customer profile")
+        reg.markdown("booking.profile_heading")
         with gr.Row():
-            prof_id = gr.Number(label="Customer ID", precision=0)
-            prof_btn = gr.Button("Show profile")
+            prof_id = reg.number("booking.profile_id", precision=0)
+            prof_btn = reg.button("booking.show_profile")
         prof_out = gr.Markdown("")
         with gr.Row():
-            inter_type = gr.Dropdown(
-                ["call", "inquiry", "quotation", "booking", "cancellation",
-                 "payment", "contract", "note"], value="call", label="Interaction type")
-            inter_summary = gr.Textbox(label="Interaction summary")
-            inter_btn = gr.Button("Add interaction")
+            inter_type = reg.dropdown_t(
+                "booking.inter_type",
+                [("booking.inter_call", "call"),
+                 ("booking.inter_inquiry", "inquiry"),
+                 ("booking.inter_quotation", "quotation"),
+                 ("booking.inter_booking", "booking"),
+                 ("booking.inter_cancellation", "cancellation"),
+                 ("booking.inter_payment", "payment"),
+                 ("booking.inter_contract", "contract"),
+                 ("booking.inter_note", "note")],
+                value="call")
+            inter_summary = reg.textbox("booking.inter_summary")
+            inter_btn = reg.button("booking.add_interaction")
 
-        def _customers_md(emp, search=""):
+        def _customers_md(emp, lang, search=""):
             # The service already masks the National ID unless the caller
             # holds customer.view_sensitive — the UI just displays it.
             rows = []
             for c in customers.list_customers(emp, search=search or ""):
                 rows.append([c.id, c.full_name, c.phone, c.email, c.national_id])
-            return _md_table(["ID", "Name", "Phone", "Email", "National ID"], rows)
+            return _md_table(
+                [t(lang, "booking.table_id"), t(lang, "booking.table_name"),
+                 t(lang, "booking.table_phone"), t(lang, "booking.table_email"),
+                 t(lang, "booking.table_national")], rows, lang)
 
         def do_refresh_cust(token, search):
-            return _customers_md(employee(token), search)
+            emp = employee(token)
+            return _customers_md(emp, _lang(token), search)
 
         def do_create_cust(token, name, phone, email, address, national, notes, force):
             emp = employee(token)
+            lang = _lang(token)
             try:
                 created = customers.create_customer(
                     emp, full_name=name or "", phone=phone or "",
@@ -147,55 +191,65 @@ def build_booking_ui(db: DatabaseManager, auth: AuthService,
             except ApplicationError as exc:
                 dupes = getattr(exc, "duplicates", None)
                 if dupes:
-                    lines = ["**Possible/confirmed duplicate(s):**"]
+                    lines = [t(lang, "booking.msg_dup_heading")]
                     for d in dupes:
-                        lines.append(f"- {d['full_name']} (same {d['match']})")
-                    lines.append("Tick the checkbox to create anyway "
-                                 "(possible duplicates only).")
-                    return _customers_md(emp), "\n".join(lines)
+                        match = t(lang, DUP_MATCH_KEYS.get(d["match"], "booking.dup_phone"))
+                        lines.append(t(lang, "booking.msg_dup_line").format(
+                            name=d["full_name"], match=match))
+                    lines.append(t(lang, "booking.msg_dup_hint"))
+                    return _customers_md(emp, lang), "\n".join(lines)
                 raise gr.Error(str(exc))
-            gr.Info(f"Customer '{created.full_name}' created (ID {created.id}).")
-            return _customers_md(emp), ""
+            gr.Info(t(lang, "booking.msg_customer_created").format(
+                name=created.full_name, id=created.id))
+            return _customers_md(emp, lang), ""
 
         def do_profile(token, cid):
             emp = employee(token)
+            lang = _lang(token)
             if not cid:
-                raise gr.Error("Enter a customer ID first.")
+                raise gr.Error(t(lang, "booking.msg_need_customer_id"))
             try:
                 prof = customers.profile(emp, int(cid))
             except ApplicationError as exc:
                 raise gr.Error(str(exc))
             c = prof["customer"]
-            t = prof["totals"]
+            totals = prof["totals"]
             lines = [
                 f"## {c.full_name}",
-                f"**Phone:** {c.phone}  \n**Email:** {c.email or '—'}  \n"
-                f"**National ID:** {c.national_id or '—'}  \n**Address:** {c.address or '—'}",
-                f"**Bookings:** {t['booking_count']}  \n"
-                f"**Contracted:** {format_money(t['contracted'])}  \n"
-                f"**Collected:** {format_money(t['collected'])}  \n"
-                f"**Outstanding:** {format_money(t['outstanding'])}",
+                f"**{t(lang, 'booking.profile_phone')}:** {c.phone}  \n"
+                f"**{t(lang, 'booking.profile_email')}:** {c.email or '—'}  \n"
+                f"**{t(lang, 'booking.profile_national')}:** {c.national_id or '—'}  \n"
+                f"**{t(lang, 'booking.profile_address')}:** {c.address or '—'}",
+                f"**{t(lang, 'booking.profile_bookings')}:** {totals['booking_count']}  \n"
+                f"**{t(lang, 'booking.profile_contracted')}:** {format_money(totals['contracted'])}  \n"
+                f"**{t(lang, 'booking.profile_collected')}:** {format_money(totals['collected'])}  \n"
+                f"**{t(lang, 'booking.profile_outstanding')}:** {format_money(totals['outstanding'])}",
+                f"### {t(lang, 'booking.profile_bookings')}",
+                _md_table(
+                    [t(lang, "booking.table_number"), t(lang, "booking.table_hall"),
+                     t(lang, "booking.table_event"), t(lang, "booking.table_status"),
+                     t(lang, "booking.table_total")],
+                    [[b["number"], b["hall_id"], b["start_at"][:16],
+                      _status(lang, b["status"]), format_money(b["total_amount"])]
+                     for b in prof["bookings"]], lang),
+                f"### {t(lang, 'booking.profile_interactions')}",
+                _md_table(
+                    [t(lang, "booking.table_type"), t(lang, "booking.table_summary")],
+                    [[t(lang, INTER_TYPE_KEYS.get(i.type, "booking.inter_note")), i.summary]
+                     for i in prof["interactions"]], lang),
             ]
-            lines.append("### Bookings")
-            lines.append(_md_table(
-                ["Number", "Hall", "Date", "Status", "Total"],
-                [[b["number"], b["hall_id"], b["start_at"][:16], b["status"],
-                  format_money(b["total_amount"])] for b in prof["bookings"]]))
-            lines.append("### Interactions")
-            lines.append(_md_table(
-                ["Type", "Summary"],
-                [[i.type, i.summary] for i in prof["interactions"]]))
             return "\n\n".join(lines)
 
         def do_add_interaction(token, cid, itype, summary):
             emp = employee(token)
+            lang = _lang(token)
             if not cid:
-                raise gr.Error("Enter a customer ID first.")
+                raise gr.Error(t(lang, "booking.msg_need_customer_id"))
             try:
                 customers.add_interaction(emp, int(cid), itype, summary or "")
             except ApplicationError as exc:
                 raise gr.Error(str(exc))
-            gr.Info("Interaction recorded.")
+            gr.Info(t(lang, "booking.msg_interaction"))
             return do_profile(token, cid)
 
         refresh_cust_btn.click(do_refresh_cust, inputs=[session_token, cust_search],
@@ -208,46 +262,57 @@ def build_booking_ui(db: DatabaseManager, auth: AuthService,
                         inter_type, inter_summary], outputs=[prof_out])
 
     # ============================================================== QUOTATIONS
-    with gr.Tab("Quotations"):
-        gr.Markdown("### Quotations — check availability but reserve nothing. "
-                    "An accepted quotation converts to a Pending booking.")
+    with reg.tab("tab.quotations"):
+        reg.markdown("booking.quotations_heading")
         quot_list = gr.Markdown("")
-        refresh_quot_btn = gr.Button("Refresh quotations")
+        refresh_quot_btn = reg.button("booking.refresh_quotations")
         with gr.Row():
-            q_cust = gr.Number(label="Customer ID", precision=0)
-            q_hall = gr.Dropdown(choices=_hall_choices(), label="Hall")
-            q_pkg = gr.Dropdown(choices=_package_choices(), label="Package")
-            q_type = gr.Dropdown(choices=_type_choices(), label="Event type")
+            q_cust = reg.number("booking.q_cust", precision=0)
+            q_hall = reg.dropdown("booking.q_hall", choices=_hall_choices())
+            q_pkg = reg.dropdown_data(
+                "booking.q_pkg",
+                lambda lang: [(t(lang, "booking.no_package"), None)] +
+                [(p.name, p.id) for p in catalog.list_packages(_system_employee())])
+            q_type = reg.dropdown_data(
+                "booking.q_type",
+                lambda lang: [(t(lang, "booking.any"), None)] +
+                [(et.name, et.id) for et in halls.list_event_types(_system_employee())])
         with gr.Row():
-            q_date = gr.Textbox(label="Event date (YYYY-MM-DD)", placeholder="2026-12-04")
-            q_start = gr.Textbox(label="Start time (HH:MM)", value="18:00")
-            q_end = gr.Textbox(label="End time (HH:MM)", value="23:00")
-            q_guests = gr.Number(label="Guests", precision=0, value=100)
-        q_services = gr.CheckboxGroup(choices=_service_choices(),
-                                      label="Additional services (quantity 1)")
-        q_create_btn = gr.Button("Create quotation", variant="primary")
+            q_date = reg.textbox("booking.q_date", placeholder="2026-12-04")
+            q_start = reg.textbox("booking.q_start", value="18:00")
+            q_end = reg.textbox("booking.q_end", value="23:00")
+            q_guests = reg.number("booking.q_guests", precision=0, value=100)
+        q_services = reg.checkbox_group("booking.q_services", choices=_service_choices())
+        q_create_btn = reg.button("booking.create_quotation", variant="primary")
         q_out = gr.Markdown("")
         with gr.Row():
-            q_id = gr.Number(label="Quotation ID", precision=0)
-            q_send_btn = gr.Button("Send")
-            q_accept_btn = gr.Button("Accept")
-            q_convert_btn = gr.Button("Accept & convert to booking", variant="primary")
+            q_id = reg.number("booking.q_id", precision=0)
+            q_send_btn = reg.button("booking.q_send")
+            q_accept_btn = reg.button("booking.q_accept")
+            q_convert_btn = reg.button("booking.q_convert", variant="primary")
 
-        def _quotations_md(emp):
+        def _quotations_md(emp, lang):
             rows = []
             for q in quotations.list_quotations(emp):
                 rows.append([q.id, q.number, q.customer_id, q.hall_id,
                              q.start_at.strftime("%Y-%m-%d %H:%M") if q.start_at else "",
-                             q.guest_count, format_money(q.total_amount), q.status])
-            return _md_table(["ID", "Number", "Customer", "Hall", "Event",
-                              "Guests", "Total", "Status"], rows)
+                             q.guest_count, format_money(q.total_amount),
+                             _status(lang, q.status)])
+            return _md_table(
+                [t(lang, "booking.table_id"), t(lang, "booking.table_number"),
+                 t(lang, "booking.table_customer"), t(lang, "booking.table_hall"),
+                 t(lang, "booking.table_event"), t(lang, "booking.table_guests"),
+                 t(lang, "booking.table_total"), t(lang, "booking.table_status")],
+                rows, lang)
 
         def do_refresh_quot(token):
-            return _quotations_md(employee(token))
+            emp = employee(token)
+            return _quotations_md(emp, _lang(token))
 
         def do_create_quot(token, cid, hall, pkg, etype, date, start, end,
                            guests, service_ids):
             emp = employee(token)
+            lang = _lang(token)
             try:
                 start_dt, end_dt = _when(date, start, end)
                 quote = quotations.create_quotation(
@@ -260,31 +325,35 @@ def build_booking_ui(db: DatabaseManager, auth: AuthService,
                 items = quotations.list_items(emp, quote.id)
             except ApplicationError as exc:
                 raise gr.Error(str(exc))
-            lines = [f"**Quotation {quote.number} created** (valid until "
-                     f"{quote.valid_until.strftime('%Y-%m-%d %H:%M') if quote.valid_until else '—'}).",
-                     "| Item | Amount |", "| --- | ---:|"]
+            valid = (quote.valid_until.strftime("%Y-%m-%d %H:%M")
+                     if quote.valid_until else "—")
+            lines = [t(lang, "booking.msg_quot_created").format(
+                        number=quote.number, valid=valid),
+                     f"| {t(lang, 'booking.table_item')} | {t(lang, 'booking.table_amount')} |",
+                     "| --- | ---:|"]
             for item in items:
-                lines.append(f"| {item.label} | {format_money(item.amount)} |")
-            lines.append(f"| **Total** | **{format_money(quote.total_amount)}** |")
-            gr.Info(f"Quotation {quote.number} created — time NOT reserved.")
-            return _quotations_md(emp), "\n".join(lines)
+                lines.append(f"| {translate_price_label(lang, item.label)} | {format_money(item.amount)} |")
+            lines.append(f"| **{t(lang, 'booking.table_total')}** | **{format_money(quote.total_amount)}** |")
+            gr.Info(t(lang, "booking.msg_quot_created_info").format(number=quote.number))
+            return _quotations_md(emp, lang), "\n".join(lines)
 
         def _quot_action(token, qid, action):
             emp = employee(token)
+            lang = _lang(token)
             if not qid:
-                raise gr.Error("Enter a quotation ID first.")
+                raise gr.Error(t(lang, "booking.msg_need_quotation_id"))
             try:
                 quote = quotations.get_quotation(emp, int(qid))
                 if quote is None:
-                    raise gr.Error(f"Quotation #{int(qid)} does not exist.")
+                    raise gr.Error(t(lang, "booking.msg_quot_not_exist").format(id=int(qid)))
                 if action == "send":
                     quote = quotations.send_quotation(emp, int(qid))
-                    gr.Info(f"Quotation {quote.number} sent.")
-                    return _quotations_md(emp), f"Quotation {quote.number} is now Sent."
+                    gr.Info(t(lang, "booking.msg_quot_sent").format(number=quote.number))
+                    return _quotations_md(emp, lang), t(lang, "booking.msg_quot_sent_out").format(number=quote.number)
                 if action == "accept":
                     quote = quotations.accept_quotation(emp, int(qid))
-                    gr.Info(f"Quotation {quote.number} accepted.")
-                    return _quotations_md(emp), f"Quotation {quote.number} is now Accepted."
+                    gr.Info(t(lang, "booking.msg_quot_accepted").format(number=quote.number))
+                    return _quotations_md(emp, lang), t(lang, "booking.msg_quot_accepted_out").format(number=quote.number)
                 # convert: accept first (if not already), then convert.
                 if quote.status in ("draft", "sent"):
                     quote = quotations.accept_quotation(emp, int(qid))
@@ -293,11 +362,11 @@ def build_booking_ui(db: DatabaseManager, auth: AuthService,
                     event_type_id=quote.event_type_id, package_id=quote.package_id,
                     start_at=quote.start_at, end_at=quote.end_at,
                     guests=quote.guest_count, quotation_id=quote.id)
-                gr.Info(f"Booking {booking.number} created (Pending, hold started).")
-                return _quotations_md(emp), (
-                    f"**Booking {booking.number}** created — Pending, "
-                    f"hold until {booking.hold_expires_at.strftime('%Y-%m-%d %H:%M') if booking.hold_expires_at else '—'}, "
-                    f"deposit required {format_money(booking.deposit_required)}.")
+                gr.Info(t(lang, "booking.msg_booking_created").format(number=booking.number))
+                return _quotations_md(emp, lang), t(lang, "booking.msg_convert_out").format(
+                    number=booking.number,
+                    hold=booking.hold_expires_at.strftime("%Y-%m-%d %H:%M") if booking.hold_expires_at else "—",
+                    deposit=format_money(booking.deposit_required))
             except ApplicationError as exc:
                 raise gr.Error(str(exc))
 
@@ -313,87 +382,119 @@ def build_booking_ui(db: DatabaseManager, auth: AuthService,
                             inputs=[session_token, q_id], outputs=[quot_list, q_out])
 
     # ============================================================== BOOKINGS
-    with gr.Tab("Bookings"):
-        gr.Markdown("### Bookings — Pending holds count down; a valid deposit "
-                    "confirms automatically. No manual override of conflicts.")
+    with reg.tab("tab.bookings"):
+        reg.markdown("booking.bookings_heading")
         book_list = gr.Markdown("")
-        refresh_book_btn = gr.Button("Refresh bookings")
+        refresh_book_btn = reg.button("booking.refresh_bookings")
         with gr.Row():
-            b_cust = gr.Number(label="Customer ID", precision=0)
-            b_hall = gr.Dropdown(choices=_hall_choices(), label="Hall")
-            b_pkg = gr.Dropdown(choices=_package_choices(), label="Package")
-            b_type = gr.Dropdown(choices=_type_choices(), label="Event type")
+            b_cust = reg.number("booking.b_cust", precision=0)
+            b_hall = reg.dropdown("booking.b_hall", choices=_hall_choices())
+            b_pkg = reg.dropdown_data(
+                "booking.b_pkg",
+                lambda lang: [(t(lang, "booking.no_package"), None)] +
+                [(p.name, p.id) for p in catalog.list_packages(_system_employee())])
+            b_type = reg.dropdown_data(
+                "booking.b_type",
+                lambda lang: [(t(lang, "booking.any"), None)] +
+                [(et.name, et.id) for et in halls.list_event_types(_system_employee())])
         with gr.Row():
-            b_date = gr.Textbox(label="Event date (YYYY-MM-DD)", placeholder="2026-12-04")
-            b_start = gr.Textbox(label="Start time (HH:MM)", value="18:00")
-            b_end = gr.Textbox(label="End time (HH:MM)", value="23:00")
-            b_guests = gr.Number(label="Guests", precision=0, value=100)
-        b_services = gr.CheckboxGroup(choices=_service_choices(),
-                                      label="Additional services (quantity 1)")
+            b_date = reg.textbox("booking.b_date", placeholder="2026-12-04")
+            b_start = reg.textbox("booking.b_start", value="18:00")
+            b_end = reg.textbox("booking.b_end", value="23:00")
+            b_guests = reg.number("booking.b_guests", precision=0, value=100)
+        b_services = reg.checkbox_group("booking.b_services", choices=_service_choices())
         with gr.Row():
-            b_notes = gr.Textbox(label="Internal notes")
-            b_contact = gr.Textbox(label="Additional contact phone")
-        b_create_btn = gr.Button("Create booking (Pending)", variant="primary")
+            b_notes = reg.textbox("booking.b_notes")
+            b_contact = reg.textbox("booking.b_contact")
+        b_create_btn = reg.button("booking.create_booking", variant="primary")
         b_out = gr.Markdown("")
-        gr.Markdown("#### Booking detail / timeline")
+        reg.markdown("booking.detail_heading")
         with gr.Row():
-            b_id = gr.Number(label="Booking ID", precision=0)
-            b_detail_btn = gr.Button("Show booking")
+            b_id = reg.number("booking.b_id", precision=0)
+            b_detail_btn = reg.button("booking.show_booking")
         b_detail = gr.Markdown("")
-        gr.Markdown("#### Record deposit / payment")
+        reg.markdown("booking.pay_heading")
         with gr.Row():
-            pay_amount = gr.Number(label="Amount (EGP)")
-            pay_method = gr.Dropdown(["cash", "bank_transfer", "visa_card",
-                                      "instapay", "other"], value="cash",
-                                     label="Method")
-            pay_ref = gr.Textbox(label="Reference (optional)")
-            pay_initiated = gr.Textbox(
-                label="Initiated at (ISO, optional — for grace-period cases)")
-            pay_btn = gr.Button("Record payment", variant="primary")
-        gr.Markdown("#### Lifecycle — Confirmed → In progress → Completed, "
-                    "or Confirmed → No-show.")
+            pay_amount = reg.number("booking.pay_amount")
+            pay_method = reg.dropdown_t(
+                "booking.pay_method",
+                [("booking.method_cash", "cash"),
+                 ("booking.method_bank_transfer", "bank_transfer"),
+                 ("booking.method_visa_card", "visa_card"),
+                 ("booking.method_instapay", "instapay"),
+                 ("booking.method_other", "other")],
+                value="cash")
+            pay_ref = reg.textbox("booking.pay_ref")
+            pay_initiated = reg.textbox("booking.pay_initiated")
+            pay_btn = reg.button("booking.record_payment", variant="primary")
+        reg.markdown("booking.lifecycle_heading")
         with gr.Row():
-            inprog_btn = gr.Button("Mark in progress")
-            complete_btn = gr.Button("Mark completed")
-            noshow_btn = gr.Button("Mark no-show")
-        gr.Markdown("#### Notes / cancel — cancellation needs the "
-                    "`booking.cancel` permission (Manager/Owner, SRS §8.8).")
+            inprog_btn = reg.button("booking.in_progress")
+            complete_btn = reg.button("booking.completed")
+            noshow_btn = reg.button("booking.no_show")
+        reg.markdown("booking.notes_heading")
         with gr.Row():
-            note_text = gr.Textbox(label="New internal notes")
-            note_btn = gr.Button("Update notes")
-            cancel_reason = gr.Textbox(label="Cancellation reason")
-            cancel_btn = gr.Button("Cancel booking")
-        gr.Markdown("#### Reschedule / transfer (Phase 5, SRS §8.9/§8.12) — "
-                    "needs `booking.reschedule` / `booking.transfer` (Manager/Owner).")
+            note_text = reg.textbox("booking.note_text")
+            note_btn = reg.button("booking.update_notes")
+            cancel_reason = reg.textbox("booking.cancel_reason")
+            cancel_btn = reg.button("booking.cancel_booking")
+        reg.markdown("booking.reschedule_heading")
         with gr.Row():
-            rs_date = gr.Textbox(label="New date (YYYY-MM-DD)", placeholder="2026-12-11")
-            rs_start = gr.Textbox(label="New start (HH:MM)", value="18:00")
-            rs_end = gr.Textbox(label="New end (HH:MM)", value="23:00")
-            rs_hall = gr.Dropdown(choices=_hall_choices(),
-                                  label="New hall (blank = same hall)")
-            rs_reason = gr.Textbox(label="Reschedule reason")
-            rs_btn = gr.Button("Reschedule booking")
+            rs_date = reg.textbox("booking.rs_date", placeholder="2026-12-11")
+            rs_start = reg.textbox("booking.rs_start", value="18:00")
+            rs_end = reg.textbox("booking.rs_end", value="23:00")
+            rs_hall = reg.dropdown("booking.rs_hall", choices=_hall_choices())
+            rs_reason = reg.textbox("booking.rs_reason")
+            rs_btn = reg.button("booking.reschedule_booking")
         with gr.Row():
-            tr_customer = gr.Number(label="New customer ID", precision=0)
-            tr_reason = gr.Textbox(label="Transfer reason")
-            tr_btn = gr.Button("Transfer booking")
+            tr_customer = reg.number("booking.tr_customer", precision=0)
+            tr_reason = reg.textbox("booking.tr_reason")
+            tr_btn = reg.button("booking.transfer_booking")
+        reg.markdown("booking.change_heading")
+        with gr.Row():
+            ch_services = reg.checkbox_group("booking.change_services",
+                                             choices=_service_choices())
+            ch_reason = reg.textbox("booking.change_reason")
+        with gr.Row():
+            ch_load_btn = reg.button("booking.load_current")
+            ch_btn = reg.button("booking.change_btn", variant="primary")
+        reg.markdown("booking.advisory_heading")
+        reg.markdown("booking.advisory_help")
+        with gr.Row():
+            adv_hall = reg.dropdown("booking.adv_hall", choices=_hall_choices())
+            adv_pkg = reg.dropdown_data(
+                "booking.adv_package",
+                lambda lang: [(t(lang, "booking.no_package"), None)] +
+                [(p.name, p.id) for p in catalog.list_packages(_system_employee())])
+            adv_date = reg.textbox("booking.adv_date", placeholder="2026-12-04")
+            adv_start = reg.textbox("booking.adv_start", value="18:00")
+            adv_end = reg.textbox("booking.adv_end", value="23:00")
+            adv_guests = reg.number("booking.adv_guests", precision=0, value=100)
+        adv_btn = reg.button("booking.find_alternatives", variant="primary")
+        adv_out = gr.Markdown("")
 
-        def _bookings_md(emp):
+        def _bookings_md(emp, lang):
             rows = []
             for b in bookings.list_bookings(emp):
                 rows.append([b.id, b.number, b.customer_id, b.hall_id,
                              b.start_at.strftime("%Y-%m-%d %H:%M") if b.start_at else "",
-                             b.status, format_money(b.total_amount),
-                             format_money(b.deposit_paid), _hold_countdown(b)])
-            return _md_table(["ID", "Number", "Customer", "Hall", "Event", "Status",
-                              "Total", "Deposit paid", "Hold"], rows)
+                             _status(lang, b.status), format_money(b.total_amount),
+                             format_money(b.deposit_paid), _hold_countdown(b, lang)])
+            return _md_table(
+                [t(lang, "booking.table_id"), t(lang, "booking.table_number"),
+                 t(lang, "booking.table_customer"), t(lang, "booking.table_hall"),
+                 t(lang, "booking.table_event"), t(lang, "booking.table_status"),
+                 t(lang, "booking.table_total"), t(lang, "booking.table_deposit"),
+                 t(lang, "booking.table_hold")], rows, lang)
 
         def do_refresh_books(token):
-            return _bookings_md(employee(token))
+            emp = employee(token)
+            return _bookings_md(emp, _lang(token))
 
         def do_create_book(token, cid, hall, pkg, etype, date, start, end,
                            guests, service_ids, notes, contact):
             emp = employee(token)
+            lang = _lang(token)
             try:
                 start_dt, end_dt = _when(date, start, end)
                 booking = bookings.create_booking(
@@ -406,52 +507,71 @@ def build_booking_ui(db: DatabaseManager, auth: AuthService,
                     notes=notes or "", additional_contact_phone=contact or "")
             except ApplicationError as exc:
                 raise gr.Error(str(exc))
-            gr.Info(f"Booking {booking.number} created (Pending).")
-            return _bookings_md(emp), (
-                f"**Booking {booking.number}** — Pending, total "
-                f"{format_money(booking.total_amount)}, deposit required "
-                f"{format_money(booking.deposit_required)}, hold until "
-                f"{booking.hold_expires_at.strftime('%Y-%m-%d %H:%M') if booking.hold_expires_at else '—'}.")
+            gr.Info(t(lang, "booking.msg_booking_created").format(number=booking.number))
+            return _bookings_md(emp, lang), t(lang, "booking.msg_book_created_out").format(
+                number=booking.number, total=format_money(booking.total_amount),
+                deposit=format_money(booking.deposit_required),
+                hold=booking.hold_expires_at.strftime("%Y-%m-%d %H:%M") if booking.hold_expires_at else "—")
 
         def do_detail(token, bid):
             emp = employee(token)
+            lang = _lang(token)
             if not bid:
-                raise gr.Error("Enter a booking ID first.")
+                raise gr.Error(t(lang, "booking.msg_need_booking_id"))
             try:
                 booking = bookings.get_booking(emp, int(bid))
                 if booking is None:
-                    raise gr.Error(f"Booking #{int(bid)} does not exist.")
+                    raise gr.Error(t(lang, "booking.msg_booking_not_exist").format(id=int(bid)))
                 items = bookings.list_price_items(emp, int(bid))
                 payments = bookings.list_payments(emp, int(bid))
                 timeline = bookings.timeline(emp, int(bid))
+                changes = bookings.list_service_changes(emp, int(bid))
             except ApplicationError as exc:
                 raise gr.Error(str(exc))
             lines = [
-                f"## Booking {booking.number} — {booking.status}",
-                f"**Customer:** {booking.customer_id}  \n**Hall:** {booking.hall_id}  \n"
-                f"**Event:** {booking.start_at.strftime('%Y-%m-%d %H:%M') if booking.start_at else '—'}"
+                f"## {t(lang, 'booking.table_number')} {booking.number} — {_status(lang, booking.status)}",
+                f"**{t(lang, 'booking.detail_customer')}:** {booking.customer_id}  \n"
+                f"**{t(lang, 'booking.detail_hall')}:** {booking.hall_id}  \n"
+                f"**{t(lang, 'booking.detail_event')}:** "
+                f"{booking.start_at.strftime('%Y-%m-%d %H:%M') if booking.start_at else '—'}"
                 f" – {booking.end_at.strftime('%H:%M') if booking.end_at else '—'}  \n"
-                f"**Guests:** {booking.guest_count}  \n**Total:** {format_money(booking.total_amount)}  \n"
-                f"**Deposit:** {format_money(booking.deposit_paid)} of "
-                f"{format_money(booking.deposit_required)}  \n"
-                f"**Hold:** {_hold_countdown(booking)}  \n**Notes:** {booking.notes or '—'}",
-                "### Price items",
-                _md_table(["Item", "Amount"],
-                          [[i["label"], format_money(i["amount"])] for i in items]),
-                "### Payments",
-                _md_table(["Number", "Amount", "Method", "Status"],
-                          [[p.number, format_money(p.amount), p.method, p.status]
-                           for p in payments]),
-                "### Timeline",
-                _md_table(["Time", "Action", "Details"],
-                          [[e["created_at"], e["action"], e["reason"]] for e in timeline]),
+                f"**{t(lang, 'booking.detail_guests')}:** {booking.guest_count}  \n"
+                f"**{t(lang, 'booking.detail_total')}:** {format_money(booking.total_amount)}  \n"
+                f"**{t(lang, 'booking.detail_deposit')}:** {format_money(booking.deposit_paid)} "
+                f"of {format_money(booking.deposit_required)}  \n"
+                f"**{t(lang, 'booking.detail_hold')}:** {_hold_countdown(booking, lang)}  \n"
+                f"**{t(lang, 'booking.detail_notes')}:** {booking.notes or '—'}",
+                f"### {t(lang, 'booking.detail_price_items')}",
+                _md_table([t(lang, "booking.table_item"), t(lang, "booking.table_amount")],
+                          [[translate_price_label(lang, i["label"]), format_money(i["amount"])]
+                           for i in items], lang),
+                f"### {t(lang, 'booking.detail_payments')}",
+                _md_table([t(lang, "booking.table_number"), t(lang, "booking.table_amount"),
+                           t(lang, "booking.table_method"), t(lang, "booking.table_status")],
+                          [[p.number, format_money(p.amount),
+                            t(lang, PAY_METHOD_KEYS.get(p.method, "booking.method_other")),
+                            _status(lang, p.status)] for p in payments], lang),
+                f"### {t(lang, 'booking.detail_timeline')}",
+                _md_table([t(lang, "booking.table_time"), t(lang, "booking.table_action"),
+                           t(lang, "booking.table_details")],
+                          [[e["created_at"], e["action"], e["reason"]] for e in timeline], lang),
             ]
+            if changes:
+                lines.append(f"### {t(lang, 'booking.detail_changes')}")
+                lines.append(_md_table(
+                    [t(lang, "booking.table_time"), t(lang, "booking.table_by"),
+                     t(lang, "booking.table_reason"), t(lang, "booking.table_old"),
+                     t(lang, "booking.table_new"), t(lang, "booking.table_delta")],
+                    [[c["created_at"], c["employee_id"] or "—", c["reason"] or "—",
+                      format_money(c["old_total"]), format_money(c["new_total"]),
+                      format_money(c["delta"])] for c in changes], lang))
             return "\n\n".join(lines)
 
         def do_pay(token, bid, amount, method, ref, initiated):
             emp = employee(token)
+            lang = _lang(token)
             if not bid:
-                raise gr.Error("Enter a booking ID first.")
+                raise gr.Error(t(lang, "booking.msg_need_booking_id"))
             try:
                 amount_piasters = egp_to_piasters(amount, "Amount (EGP)")
                 initiated_dt = (parse_iso_datetime(initiated, "Initiated at")
@@ -463,38 +583,42 @@ def build_booking_ui(db: DatabaseManager, auth: AuthService,
             except ApplicationError as exc:
                 raise gr.Error(str(exc))
             status = booking.status if booking else "?"
-            gr.Info(f"Payment {payment.number} recorded. Booking is now {status}.")
-            return _bookings_md(emp), (
-                f"Payment **{payment.number}** recorded: "
-                f"{format_money(payment.amount)} ({method}). "
-                f"Booking status: **{status}**.")
+            gr.Info(t(lang, "booking.msg_payment_recorded").format(
+                number=payment.number, status=_status(lang, status)))
+            return _bookings_md(emp, lang), t(lang, "booking.msg_pay_out").format(
+                number=payment.number, amount=format_money(payment.amount),
+                method=t(lang, PAY_METHOD_KEYS.get(method, "booking.method_other")),
+                status=_status(lang, status))
 
         def do_notes(token, bid, notes):
             emp = employee(token)
+            lang = _lang(token)
             if not bid:
-                raise gr.Error("Enter a booking ID first.")
+                raise gr.Error(t(lang, "booking.msg_need_booking_id"))
             try:
                 bookings.update_notes(emp, int(bid), notes or "")
             except ApplicationError as exc:
                 raise gr.Error(str(exc))
-            gr.Info("Notes updated.")
-            return _bookings_md(emp), "Notes updated (old/new recorded in audit)."
+            gr.Info(t(lang, "booking.msg_notes_updated"))
+            return _bookings_md(emp, lang), t(lang, "booking.msg_notes_out")
 
         def do_cancel(token, bid, reason):
             emp = employee(token)
+            lang = _lang(token)
             if not bid:
-                raise gr.Error("Enter a booking ID first.")
+                raise gr.Error(t(lang, "booking.msg_need_booking_id"))
             try:
                 booking = bookings.cancel_booking(emp, int(bid), reason or "")
             except ApplicationError as exc:
                 raise gr.Error(str(exc))
-            gr.Info(f"Booking {booking.number} cancelled.")
-            return _bookings_md(emp), f"Booking **{booking.number}** cancelled."
+            gr.Info(t(lang, "booking.msg_booking_cancelled").format(number=booking.number))
+            return _bookings_md(emp, lang), t(lang, "booking.msg_cancel_out").format(number=booking.number)
 
         def do_reschedule(token, bid, date, start, end, hall, reason):
             emp = employee(token)
+            lang = _lang(token)
             if not bid:
-                raise gr.Error("Enter a booking ID first.")
+                raise gr.Error(t(lang, "booking.msg_need_booking_id"))
             try:
                 start_dt, end_dt = _when(date, start, end)
                 booking = bookings.reschedule_booking(
@@ -503,34 +627,34 @@ def build_booking_ui(db: DatabaseManager, auth: AuthService,
                     reason=reason or "")
             except ApplicationError as exc:
                 raise gr.Error(str(exc))
-            gr.Info(f"Booking {booking.number} rescheduled.")
-            return _bookings_md(emp), (
-                f"Booking **{booking.number}** rescheduled to "
-                f"{booking.start_at.strftime('%Y-%m-%d %H:%M') if booking.start_at else '—'}"
-                f" — new total {format_money(booking.total_amount)}.")
+            gr.Info(t(lang, "booking.msg_rescheduled").format(number=booking.number))
+            return _bookings_md(emp, lang), t(lang, "booking.msg_reschedule_out").format(
+                number=booking.number,
+                when=booking.start_at.strftime("%Y-%m-%d %H:%M") if booking.start_at else "—",
+                total=format_money(booking.total_amount))
 
         def do_transfer(token, bid, new_cid, reason):
             emp = employee(token)
+            lang = _lang(token)
             if not bid:
-                raise gr.Error("Enter a booking ID first.")
+                raise gr.Error(t(lang, "booking.msg_need_booking_id"))
             if not new_cid:
-                raise gr.Error("Enter the new customer ID first.")
+                raise gr.Error(t(lang, "booking.msg_need_new_customer"))
             try:
                 booking = bookings.transfer_booking(
                     emp, int(bid), new_customer_id=int(new_cid),
                     reason=reason or "")
             except ApplicationError as exc:
                 raise gr.Error(str(exc))
-            gr.Info(f"Booking {booking.number} transferred.")
-            return _bookings_md(emp), (
-                f"Booking **{booking.number}** transferred to customer "
-                f"**{booking.customer_id}**. Payments stay attached; a new "
-                f"contract version was generated when one existed.")
+            gr.Info(t(lang, "booking.msg_transferred").format(number=booking.number))
+            return _bookings_md(emp, lang), t(lang, "booking.msg_transfer_out").format(
+                number=booking.number, customer=booking.customer_id)
 
         def _lifecycle(token, bid, action):
             emp = employee(token)
+            lang = _lang(token)
             if not bid:
-                raise gr.Error("Enter a booking ID first.")
+                raise gr.Error(t(lang, "booking.msg_need_booking_id"))
             try:
                 if action == "in_progress":
                     booking = bookings.mark_in_progress(emp, int(bid))
@@ -540,8 +664,76 @@ def build_booking_ui(db: DatabaseManager, auth: AuthService,
                     booking = bookings.mark_no_show(emp, int(bid))
             except ApplicationError as exc:
                 raise gr.Error(str(exc))
-            gr.Info(f"Booking {booking.number} is now {booking.status}.")
-            return _bookings_md(emp), f"Booking **{booking.number}** → **{booking.status}**."
+            gr.Info(t(lang, "booking.msg_lifecycle").format(
+                number=booking.number, status=_status(lang, booking.status)))
+            return _bookings_md(emp, lang), t(lang, "booking.msg_lifecycle_out").format(
+                number=booking.number, status=_status(lang, booking.status))
+
+        def do_load_current(token, bid):
+            emp = employee(token)
+            lang = _lang(token)
+            if not bid:
+                raise gr.Error(t(lang, "booking.msg_need_booking_id"))
+            try:
+                current = bookings.list_booking_services(emp, int(bid))
+            except ApplicationError as exc:
+                raise gr.Error(str(exc))
+            return gr.update(value=[int(s["service_id"]) for s in current])
+
+        def do_change_services(token, bid, service_ids, reason):
+            emp = employee(token)
+            lang = _lang(token)
+            if not bid:
+                raise gr.Error(t(lang, "booking.msg_need_booking_id"))
+            try:
+                result = bookings.change_services(
+                    emp, int(bid),
+                    [ServiceSelection(service_id=int(sid)) for sid in service_ids],
+                    reason=reason or "")
+            except ApplicationError as exc:
+                raise gr.Error(str(exc))
+            booking = result["booking"]
+            gr.Info(t(lang, "booking.msg_services_changed").format(
+                number=booking.number,
+                old=format_money(result["old_total"]),
+                new=format_money(result["new_total"])))
+            lines = [t(lang, "booking.msg_change_out").format(
+                number=booking.number,
+                old=format_money(result["old_total"]),
+                new=format_money(result["new_total"]),
+                delta=format_money(result["delta"]))]
+            if result["delta"] > 0 and result["due_at"]:
+                lines.append(t(lang, "booking.msg_change_due").format(
+                    due=result["due_at"][:16], amount=format_money(result["delta"])))
+            if result["refund_id"]:
+                lines.append(t(lang, "booking.msg_change_refund").format(
+                    id=result["refund_id"],
+                    amount=format_money(-result["delta"])))
+            if result["contract_action"] == "new_version":
+                lines.append(t(lang, "booking.msg_change_contract"))
+            return _bookings_md(emp, lang), "\n\n".join(lines)
+
+        def do_advisory(token, hall, pkg, date, start, end, guests):
+            emp = employee(token)
+            lang = _lang(token)
+            try:
+                start_dt, end_dt = _when(date, start, end)
+                suggestions = availability.suggest_alternatives(
+                    emp, hall_id=int(hall), start_at=start_dt, end_at=end_dt,
+                    guests=int(guests), package_id=int(pkg) if pkg else None,
+                    lang=lang)
+            except ApplicationError as exc:
+                raise gr.Error(str(exc))
+            if not suggestions:
+                return t(lang, "booking.advisory_none")
+            lines = [f"### {t(lang, 'advisory.title')}"]
+            for s in suggestions:
+                lines.append(
+                    f"- **{s.hall_name}** — "
+                    f"{s.start_at.strftime('%Y-%m-%d %H:%M')} – "
+                    f"{s.end_at.strftime('%H:%M')} — "
+                    f"{format_advisory_reason(lang, s)}")
+            return "\n".join(lines)
 
         refresh_book_btn.click(do_refresh_books, inputs=[session_token], outputs=[book_list])
         b_create_btn.click(do_create_book, inputs=[session_token, b_cust, b_hall,
@@ -567,3 +759,13 @@ def build_booking_ui(db: DatabaseManager, auth: AuthService,
                            inputs=[session_token, b_id], outputs=[book_list, b_out])
         noshow_btn.click(lambda t, i: _lifecycle(t, i, "no_show"),
                          inputs=[session_token, b_id], outputs=[book_list, b_out])
+        ch_load_btn.click(do_load_current, inputs=[session_token, b_id],
+                          outputs=[ch_services])
+        ch_btn.click(do_change_services, inputs=[session_token, b_id, ch_services,
+                                                 ch_reason],
+                     outputs=[book_list, b_out])
+        adv_btn.click(do_advisory, inputs=[session_token, adv_hall, adv_pkg,
+                                            adv_date, adv_start, adv_end, adv_guests],
+                      outputs=[adv_out])
+
+    return reg.result()

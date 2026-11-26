@@ -4,10 +4,26 @@ Repositories own SQL. Services call these and never build SQL from
 user input — all queries are parameterised. Duplicate detection uses
 the normalized phone/email columns (SRS §5.2); the National ID value
 is never returned by a duplicate search.
+
+Phase 8 (FR-014): the National ID is encrypted at rest (Fernet, see
+utils/crypto.py). Every write encrypts; every read decrypts, so
+callers always see plaintext and never touch ciphertext. Duplicate
+detection matches on ``national_id_hash`` (SHA-256 blind index) —
+Fernet is randomised, so the ciphertext itself cannot be matched.
 """
 from __future__ import annotations
 
+from ...utils.crypto import blind_index, decrypt_text, encrypt_text
 from ..database import DatabaseManager
+
+
+def _decrypt_row(data: dict) -> dict:
+    """Decrypt the National ID of a customer row in place and drop
+    the blind-index hash (callers never need it)."""
+    if "national_id" in data:
+        data["national_id"] = decrypt_text(data["national_id"])
+    data.pop("national_id_hash", None)
+    return data
 
 
 def insert_customer(db: DatabaseManager, *, full_name: str, phone: str,
@@ -16,10 +32,11 @@ def insert_customer(db: DatabaseManager, *, full_name: str, phone: str,
                     conn=None) -> int:
     sql = """INSERT INTO customers
              (full_name, phone, phone_normalized, email, email_normalized,
-              address, national_id, notes)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)"""
+              address, national_id, national_id_hash, notes)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"""
     params = (full_name, phone, phone_normalized, email, email_normalized,
-              address, national_id, notes)
+              address, encrypt_text(national_id), blind_index(national_id),
+              notes)
     if conn is not None:
         return int(conn.execute(sql, params).lastrowid)
     return db.execute(sql, params)
@@ -31,9 +48,11 @@ def update_customer(db: DatabaseManager, customer_id: int, *, full_name: str,
                     notes: str, conn=None) -> None:
     sql = """UPDATE customers SET full_name = ?, phone = ?, phone_normalized = ?,
              email = ?, email_normalized = ?, address = ?, national_id = ?,
+             national_id_hash = ?,
              notes = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?"""
     params = (full_name, phone, phone_normalized, email, email_normalized,
-              address, national_id, notes, customer_id)
+              address, encrypt_text(national_id), blind_index(national_id),
+              notes, customer_id)
     if conn is not None:
         conn.execute(sql, params)
         return
@@ -44,7 +63,7 @@ def get_customer(db: DatabaseManager, customer_id: int) -> dict | None:
     row = db.query_one("SELECT * FROM customers WHERE id = ?", (customer_id,))
     if row is None:
         return None
-    data = dict(row)
+    data = _decrypt_row(dict(row))
     data["additional_phones"] = [
         r["phone"] for r in db.query_all(
             "SELECT phone FROM customer_contacts WHERE customer_id = ? ORDER BY id",
@@ -71,7 +90,7 @@ def list_customers(db: DatabaseManager, *, search: str = "") -> list[dict]:
         rows = db.query_all("SELECT * FROM customers ORDER BY full_name")
     out = []
     for row in rows:
-        data = dict(row)
+        data = _decrypt_row(dict(row))
         data["additional_phones"] = []
         out.append(data)
     return out
@@ -85,7 +104,7 @@ def find_by_phone(db: DatabaseManager, phone_normalized: str) -> list[dict]:
         "SELECT * FROM customers WHERE phone_normalized = ? ORDER BY id",
         (phone_normalized,),
     )
-    return [dict(r) for r in rows]
+    return [_decrypt_row(dict(r)) for r in rows]
 
 
 def find_by_email(db: DatabaseManager, email_normalized: str) -> list[dict]:
@@ -96,20 +115,22 @@ def find_by_email(db: DatabaseManager, email_normalized: str) -> list[dict]:
         "SELECT * FROM customers WHERE email_normalized = ? ORDER BY id",
         (email_normalized,),
     )
-    return [dict(r) for r in rows]
+    return [_decrypt_row(dict(r)) for r in rows]
 
 
 def find_by_national_id(db: DatabaseManager, national_id: str) -> list[dict]:
     """Exact National ID matches (confirmed duplicates, SRS §5.2). The
     returned rows are used only to count/identify matches — services
-    must never expose the ID value in a duplicate warning."""
+    must never expose the ID value in a duplicate warning. Matching
+    uses the blind-index hash (FR-014): the ciphertext is randomised
+    and cannot be matched directly."""
     if not national_id:
         return []
     rows = db.query_all(
-        "SELECT * FROM customers WHERE national_id = ? AND national_id != '' ORDER BY id",
-        (national_id,),
+        "SELECT * FROM customers WHERE national_id_hash = ? AND national_id_hash != '' ORDER BY id",
+        (blind_index(national_id),),
     )
-    return [dict(r) for r in rows]
+    return [_decrypt_row(dict(r)) for r in rows]
 
 
 def insert_contact(db: DatabaseManager, *, customer_id: int, phone: str,

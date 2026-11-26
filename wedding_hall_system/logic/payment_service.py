@@ -269,6 +269,11 @@ class PaymentService:
                            title=f"Installment overdue — booking #{booking_id}",
                            body=f"Installment {row['sequence']} "
                                 f"({format_money(int(row['amount']))}) is overdue.",
+                           title_key="notif.installment_due.title",
+                           body_key="notif.installment_due.body",
+                           data={"number": booking_id,
+                                 "sequence": row["sequence"],
+                                 "amount": format_money(int(row["amount"]))},
                            entity_type="booking", entity_id=booking_id, conn=conn)
         rows = repo.list_installments(self.db, booking_id)
         return [_row_to_installment(r, late_fee_percent) for r in rows]
@@ -328,6 +333,11 @@ class PaymentService:
                        title=f"Installment overdue — booking #{row['booking_id']}",
                        body=f"Installment {row['sequence']} "
                             f"({format_money(int(row['amount']))}) is overdue.",
+                       title_key="notif.installment_due.title",
+                       body_key="notif.installment_due.body",
+                       data={"number": row["booking_id"],
+                             "sequence": row["sequence"],
+                             "amount": format_money(int(row["amount"]))},
                        entity_type="booking", entity_id=int(row["booking_id"]),
                        conn=conn)
         return {"overdue_marked": len(overdue)}

@@ -650,3 +650,195 @@ tabs were added to the use-case, DFD Level 0 and class diagrams in
 the Phase 7 update; the activity, sequence, DFD Level 1 and ER
 diagrams are unchanged by Phase 7 (no schema change, no new
 booking flow).
+
+### A-68 — Field-level encryption covers the National ID only (2026-11-26)
+
+SRS §2.4 names the National ID as the sensitive field to encrypt at
+rest, so FR-014 encrypts exactly that field (Fernet, `enc:v1:` prefix,
+blind SHA-256 index for exact-match duplicate detection, since Fernet
+is randomized). Phone and email are NOT encrypted: they are lookup
+keys (normalized-phone duplicate detection, find-by-phone/email) and
+are protected by RBAC and masking exactly as before. Decryption is
+transparent to authorized roles and masked for everyone else;
+audit logs never contain the plaintext value. The key comes from
+`WEDDING_HALL_ENCRYPTION_KEY` (env var, never committed, never in
+the DB); `scripts/generate_encryption_key.py` generates it; a missing
+or invalid key fails loudly with a clear message and never silently
+stores plaintext for new writes.
+
+### A-69 — Post-confirmation service changes apply to Confirmed bookings only (2026-11-26)
+
+FR-026 changes apply to Confirmed bookings. Pending bookings are
+rejected (their price is not frozen yet — re-price them by editing
+the quotation/booking instead) and In Progress bookings are rejected
+(the event is being delivered, not re-priced). The change re-prices
+with the current rules carrying the original manual discount forward
+(same pattern as rescheduling, A-48); an increase becomes outstanding
+with a due date (event − final-deadline days); a decrease creates a
+`pending_approval` refund for the refundable part (linked to the
+largest recorded payment) — never auto-paid. Old/new selections,
+prices, user, time and reason are recorded in
+`booking_service_changes`, the booking timeline and the audit log.
+
+### A-70 — A service change creates a new contract version only when the total changes (2026-11-26)
+
+If the service change moves the total amount (delta ≠ 0) a new
+contract version is generated after the change commits (same pattern
+as ownership transfer); a zero-delta service swap is recorded as a
+note only, with no new version. Previous versions are preserved in
+both cases.
+
+### A-71 — Service-layer exception messages stay English (2026-11-26)
+
+All user-visible UI strings are bilingual, but `raise`d service
+exception messages (ValidationError, NotFoundError, PermissionError,
+etc.) remain English. They are developer-facing diagnostics rendered
+through `gr.Error`; translating every exception at the service layer
+would couple the business logic to the UI language. The UI surfaces
+its own translated messages for the common failure paths.
+
+### A-72 — Remember Me: 30-day hashed tokens, rotation, revocation (2026-11-26)
+
+FR-011 is implemented with server-side persistent tokens: a random
+opaque token, only its SHA-256 hash stored, 30-day expiry, at most 3
+live tokens per employee (oldest revoked first), rotation on every
+successful validation (the old token dies), revocation on logout and
+on any password change/reset or account deactivation, issuance and
+revocation audited without the token value. The client handoff uses
+Gradio 6.32 `gr.BrowserState` (browser localStorage, storage key
+`whms-remember-me`); the password is never stored on the client.
+The BrowserState `secret` is only obfuscation for localStorage — the
+real security is server-side. `WEDDING_HALL_BROWSER_SECRET` is an
+optional stable secret: without it Gradio generates a fresh secret
+per process, so a server restart simply asks the user to log in
+again. Sessions without Remember Me still last up to 8 h.
+
+### A-73 — Scheduling advisory: deterministic, advisory only (2026-11-26)
+
+FR-029 suggests the nearest feasible alternatives when the requested
+hall/date/time is unavailable, in a fixed deterministic order: same
+hall same day nearest time first (earlier wins ties), then same hall
+later days at the same time of day, then other halls by id, then
+shorter-duration options. Candidates are checked in 30-minute steps
+up to 7 days ahead, at most 5 suggestions, each verified with
+`check_availability` plus hall capacity, each with a plain-language
+reason in the current language. It never changes a booking, never
+shortens without customer agreement, and never goes below the
+package minimum (a request shorter than the minimum returns no
+suggestions). The service stays language-neutral (`reason_key` +
+params); the UI renders the reason.
+
+### A-74 — Seed stored National IDs in plaintext; corrected (2026-11-26)
+
+The Phase 8 customer-repository encryption was verified, but the
+seed (`data/seed.py`) inserted example customers with raw SQL and
+plaintext National IDs — the earlier claim that "seed inserts via
+the repository" was wrong. Fixed: the seed now encrypts with
+`crypto.encrypt_text` + `blind_index` exactly like the repository,
+and raises `ConfigurationError` without a key instead of silently
+storing plaintext. Verified on a fresh database: seeded IDs are
+stored as `enc:v1:…` with 64-char hashes.
+
+### A-75 — Notification `data_json` must never be NULL (2026-11-26)
+
+Migration 005 made `notifications.data_json TEXT NOT NULL DEFAULT
+'{}'`, but `insert_notification` passed an explicit NULL when no
+i18n keys were given, breaking every key-less `notify()` call.
+Fixed in the repository: store `'{}'` when `data_json is None`.
+Notification i18n keys are stored as JSON (`title_key`, `body_key`,
+`params`) and translated at read time; the stored English title/body
+remain as a fallback for older rows.
+
+### A-76 — Language toggle: one merged `gr.update` per component; Buttons use `value`, not `label` (2026-11-26)
+
+Gradio rejects the same component twice in one event's outputs, so
+`app.py` merges every registry target into ONE `gr.update` per
+component for the toggle. A live bug proved the rule: the login
+chrome put two `gr.Button`s in the "label" bucket and calling the
+toggle raised `AppError: Button.__init__() got an unexpected keyword
+argument 'label'` — the whole event errored and nothing switched.
+Buttons show text via `value`, so they belong in the "value" bucket;
+the registry itself was correct. Fixed and verified live (English
+then Arabic) plus a regression test that executes `do_language`
+directly and asserts tab titles and button text switch both ways.
+Note: the API client (`gradio_client`) does not surface updates for
+layout components (tabs), so tab switching is verified through the
+raw handler and the frontend's reactive tab label — not through the
+client.
+
+### A-77 — `from __future__` must precede module-level constants (2026-11-26)
+
+A latent Phase 8 break: `REMEMBER_ME_MAX_TOKENS = 3` sat between
+the module docstring and `from __future__ import annotations` in
+`logic/auth_service.py`, making the file uncompilable — no test had
+imported it since. Fixed by moving the import to the top. Lesson:
+any new module-level constant must go after all `__future__` imports.
+
+### A-78 — The VM demo database is encrypted with the test-only key (2026-11-26)
+
+The app database on the development VM (`data/wedding_hall.db`) was
+upgraded to schema v5 during Phase 8 and its National IDs decrypt
+with the test-only key in `tests/conftest.py` — it holds example
+data only and is git-ignored, so fresh clones are unaffected but
+must generate their own key before first launch (README "Encryption
+key"). Do not re-key the VM database without recording the decision.
+A fresh unused key was generated during the smoke test and was NOT
+applied to the app database.
+
+### A-79 — A-66 is superseded: FR-026 and FR-029 are built in Phase 8 (2026-11-26)
+
+Ahmed approved building the remaining items on 2026-11-26 ("complete
+the remaining Partial/Deferred tasks and add full Arabic"), so A-66's
+"deferred at project end" no longer holds: FR-026 + BR-13, FR-029,
+FR-011, FR-014 and NFR-005 are all Implemented + Verified in Phase 8
+(34 new tests, `tests/test_phase8.py`). A-66 stays in this file as the
+historical record of the Phase 7 position; the traceability matrix
+carries the new status. The open instructor questions A-01/A-02/A-03
+are unchanged — they are still unconfirmed.
+
+### A-80 — Full Arabic: 1,295+ i18n keys, parity enforced by test (2026-11-26)
+
+NFR-005 is complete: every visible string in all 24 tabs switches
+with the language toggle, including all Phase 1–5 static form
+labels, tab titles, buttons, messages, notifications, reports and
+contract templates (Arabic `body_ar` mirrors the English template
+body, same placeholders). The `LabelRegistry` (`ui/i18n.py`) builds
+each component in Arabic by default and registers it once; the
+toggle returns one merged `gr.update` per component (A-76). Frozen
+price-breakdown labels are translated at display time by pattern;
+report columns stay canonical English internally and are translated
+at render time; CSV export keeps canonical English columns.
+Acceptance is enforced by `tests/test_phase8.py`: every key exists
+in both languages (set equality, 1,295 keys), all 24 tab titles are
+Arabic and differ from English, and the toggle executes and switches
+tab titles and button text both ways. Arabic stays the default;
+English works fully when selected.
+
+### A-81 — Notification de-duplication: UTC window + format normalization (2026-11-27)
+
+Three tests failed only when the suite ran 00:00–02:00 Africa/Cairo
+(`test_hold_expiring_notification_once`, `test_event_approaching_notification`,
+`test_task_due_soon_and_overdue_notifications`): each second sweep created
+one duplicate notification. Root cause was NOT Phase 8 — the bug was latent
+since Phases 5–6 and only the wall-clock time exposed it. `exists_notification`
+compared `notifications.created_at` (SQLite `CURRENT_TIMESTAMP`, UTC,
+`"YYYY-MM-DD HH:MM:SS"` with a space) against `since_iso` built from naive
+local time with `.isoformat()` (`"YYYY-MM-DDTHH:MM:SS"` with a `T`). As a
+string comparison, `' ' (0x20) < 'T' (0x54)`, so whenever the UTC date of
+`created_at` equalled the date of `since_iso` — every night 00:00–02:00 in
+Africa/Cairo (UTC+2), when local `now − 24h` lands on the same calendar date
+as UTC now — the check returned false and the warning was re-created. The
+2h UTC/local skew (A-37) was not the cause; the format mismatch was. A-50's
+and A-56's "~22h effective window" note described the skew only and missed
+the breakage. Fix (two layers): (1) callers
+(`BookingService._notify_time_based`, `TaskService.sweep_task_notifications`)
+compute the dedup window from UTC now in `'YYYY-MM-DD HH:MM:SS'` format, so
+the window is exactly 24h against `created_at`; the local `now` is still
+used for the hold/event/due windows, which compare against naive-local
+stored values. (2) `notification_repository.exists_notification` normalizes
+both sides with SQLite `datetime()` so a `T`-separated value can never
+break the comparison again. Verified: the 3 tests fail with
+`TZ=Africa/Cairo` before the fix and pass after it, under both
+`TZ=Africa/Cairo` and the default (UTC) timezone; full suite green under
+both. The A-50/A-56 "~22h window" statements are superseded for the dedup
+window (now exactly 24h); the lazy-sweep behaviour itself is unchanged.

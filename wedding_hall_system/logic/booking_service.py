@@ -13,9 +13,10 @@ every creation/read sweeps overdue holds first.
 """
 from __future__ import annotations
 
+import json
 import re
 import secrets
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from ..config.settings import AppSettings, format_money
 from ..data.database import DatabaseManager
@@ -147,7 +148,17 @@ class BookingService:
     def _notify_time_based(self, now: datetime) -> None:
         """Fire hold-expiring / event-approaching warnings once per
         booking per 24h (FR-060, lazy — GAP G-11)."""
-        since = _iso(now - timedelta(hours=24))
+        # A-81: the dedup window is measured against
+        # notifications.created_at, which is SQLite CURRENT_TIMESTAMP
+        # (UTC). It must therefore be computed from UTC now, in the
+        # same 'YYYY-MM-DD HH:MM:SS' format — a local-time window both
+        # shrank the effective window to ~22h (A-50) and, combined
+        # with the 'T' separator of .isoformat(), broke the dedup
+        # entirely 00:00–02:00 Africa/Cairo. ``now`` (local) is still
+        # used for the hold/event windows below, which compare
+        # against naive-local stored values.
+        since = (datetime.now(timezone.utc) - timedelta(hours=24)).strftime(
+            "%Y-%m-%d %H:%M:%S")
         hold_soon = repo.list_pending_holds_expiring_soon(
             self.db, _iso(now), _iso(now + timedelta(hours=6)))
         for booking in hold_soon:
@@ -159,6 +170,10 @@ class BookingService:
                    title=f"Hold expiring — booking {booking['number']}",
                    body=f"Hold expires at {booking['hold_expires_at']}; "
                         f"record the deposit or the booking expires.",
+                   title_key="notif.hold_expiring.title",
+                   body_key="notif.hold_expiring.body",
+                   data={"number": booking["number"],
+                         "when": booking["hold_expires_at"]},
                    entity_type="booking", entity_id=int(booking["id"]))
         starting = repo.list_confirmed_starting_soon(
             self.db, _iso(now), _iso(now + timedelta(hours=48)))
@@ -171,6 +186,11 @@ class BookingService:
                    title=f"Event approaching — booking {booking['number']}",
                    body=f"Event starts {booking['start_at']} in hall "
                         f"#{booking['hall_id']}.",
+                   title_key="notif.event_approaching.title",
+                   body_key="notif.event_approaching.body",
+                   data={"number": booking["number"],
+                         "when": booking["start_at"],
+                         "hall": booking["hall_id"]},
                    entity_type="booking", entity_id=int(booking["id"]))
 
     # -- creation -----------------------------------------------------------
@@ -345,6 +365,10 @@ class BookingService:
                    title=f"New booking {number}",
                    body=f"Booking {number} created for {start_at.date()} "
                         f"({format_money(total)}).",
+                   title_key="notif.new_booking.title",
+                   body_key="notif.new_booking.body",
+                   data={"number": number, "date": str(start_at.date()),
+                         "amount": format_money(total)},
                    entity_type="booking", entity_id=booking_id, conn=conn)
         logger.info("Booking %s created (Pending) for customer #%s",
                     number, customer_id)
@@ -543,6 +567,11 @@ class BookingService:
                    title=f"Payment received — booking {booking.number}",
                    body=f"Payment {number}: {format_money(amount_piasters)} "
                         f"({method}).",
+                   title_key="notif.payment_received.title",
+                   body_key="notif.payment_received.body",
+                   data={"number": booking.number, "payment": number,
+                         "amount": format_money(amount_piasters),
+                         "method": method},
                    entity_type="booking", entity_id=booking_id, conn=conn)
             customer_repo.insert_interaction(
                 self.db, customer_id=booking.customer_id, employee_id=employee.id,
@@ -712,6 +741,11 @@ class BookingService:
                    body=f"Booking {booking.number} cancelled: {reason}. "
                         f"Fee {format_money(fee)}, refundable "
                         f"{format_money(refundable)}.",
+                   title_key="notif.booking_cancelled.title",
+                   body_key="notif.booking_cancelled.body",
+                   data={"number": booking.number, "reason": reason,
+                         "fee": format_money(fee),
+                         "refundable": format_money(refundable)},
                    entity_type="booking", entity_id=booking_id, conn=conn)
             customer_repo.insert_interaction(
                 self.db, customer_id=booking.customer_id, employee_id=employee.id,
@@ -866,6 +900,12 @@ class BookingService:
                         f"{new_start_at.strftime('%Y-%m-%d %H:%M')}; price "
                         f"{format_money(booking.total_amount)} -> "
                         f"{format_money(new_total)}.",
+                   title_key="notif.booking_rescheduled.title",
+                   body_key="notif.booking_rescheduled.body",
+                   data={"number": booking.number,
+                         "when": new_start_at.strftime("%Y-%m-%d %H:%M"),
+                         "old": format_money(booking.total_amount),
+                         "new": format_money(new_total)},
                    entity_type="booking", entity_id=booking_id, conn=conn)
         logger.info("Booking #%s rescheduled to %s (total %s -> %s)",
                     booking_id, new_start_at, booking.total_amount, new_total)
@@ -891,6 +931,194 @@ class BookingService:
                     "reason": row["reason"] or "manual discount"}
         return {"type": "fixed", "value": int(row["amount"]),
                 "reason": row["reason"] or "manual discount"}
+
+    # -- post-confirmation service changes (SRS §3.6, FR-026, BR-13) ---------
+    def change_services(self, employee, booking_id: int, *,
+                        service_selections: list[ServiceSelection],
+                        reason: str = "") -> dict:
+        """Change the services of a Confirmed booking (SRS §3.6, FR-026).
+
+        Re-prices with the CURRENT rules (carrying the original manual
+        discount forward, like a reschedule), records the delta, and:
+
+        - increase: the difference becomes outstanding with a due date
+          (the installment final deadline); no payment is collected here.
+        - decrease: the excess paid becomes refund-eligible — a refund
+          request is created in ``pending_approval`` (never auto-paid)
+          for the refundable part; approval/payment stay separate.
+        - contract: a new contract version is required when the total
+          changes (decision A-70); a zero-delta swap is a note only.
+          The version is generated AFTER the change commits (same
+          pattern as ownership transfer) and the change record is
+          then marked ``new_version``.
+
+        Only Confirmed bookings (decision A-69: an event already in
+        progress is being delivered, its services are not re-priced).
+        Returns the change record: booking, old/new totals, delta,
+        due_at, refund_id, contract_action, change_id.
+        """
+        require_permission(self.db, employee, "booking.change_services")
+        now = datetime.now()
+        with self.db.transaction(immediate=True) as conn:
+            expire_overdue_holds(self.db, now=now, conn=conn)
+            row = self._get_or_raise(booking_id, conn=conn)
+            booking = _row_to_booking(row)
+            if booking.status != "confirmed":
+                raise ValidationError(
+                    "Services can only be changed on a Confirmed booking "
+                    f"(current status: {booking.status}).")
+            old_rows = repo.list_booking_services(self.db, booking_id)
+            old_services = []
+            for s in old_rows:
+                service_row = catalog_repo.get_service(self.db, int(s["service_id"]))
+                old_services.append({
+                    "service_id": int(s["service_id"]),
+                    "name": service_row["name"] if service_row is not None else "",
+                    "quantity": int(s["quantity"]), "amount": int(s["amount"])})
+            duration_min = int((booking.end_at - booking.start_at).total_seconds() // 60)
+            discount = self._discount_for_reprice(conn, booking_id)
+            breakdown = self.pricing.calculate(
+                employee, hall_id=booking.hall_id, package_id=booking.package_id,
+                event_type_id=booking.event_type_id, start_at=booking.start_at,
+                duration_min=duration_min, guests=booking.guest_count,
+                service_selections=service_selections, discount=discount)
+            new_total = breakdown.total
+            delta = new_total - booking.total_amount
+            policy = self.pricing.financial_policy_for_booking(booking_id)
+            deposit_percent = int(policy.get("deposit_percent", 30))
+            new_deposit_required = round(new_total * deposit_percent / 100)
+            due_at = None
+            if delta > 0:
+                deadline_days = int(policy.get("final_deadline_days_before_event", 7))
+                due = booking.start_at - timedelta(days=deadline_days)
+                due_at = _iso(due if due > now else now)
+            repo.update_booking_amounts(
+                self.db, booking_id, total_amount=new_total,
+                deposit_required=new_deposit_required, conn=conn)
+            repo.delete_booking_price_items(self.db, booking_id, conn=conn)
+            for item in breakdown.items:
+                repo.insert_booking_price_item(
+                    self.db, booking_id=booking_id, kind=item.kind,
+                    label=item.label, amount=item.amount, conn=conn)
+            repo.delete_booking_services(self.db, booking_id, conn=conn)
+            self._insert_booking_services(
+                conn, booking_id, service_selections,
+                [(i.kind, i.label, i.amount) for i in breakdown.items])
+            new_services = []
+            for sel, item in zip(
+                    service_selections,
+                    [i for i in breakdown.items if i.kind == "service"]):
+                service_row = catalog_repo.get_service(self.db, int(sel.service_id))
+                new_services.append({
+                    "service_id": int(sel.service_id),
+                    "name": service_row["name"] if service_row is not None else "",
+                    "quantity": int(sel.quantity),
+                    "amount": int(item.amount)})
+            refund_id = None
+            if delta < 0:
+                from .refund_service import RefundService
+
+                refundable = RefundService(
+                    self.db, self.settings).refundable_amount_for_booking(
+                        booking_id, conn=conn)
+                eligible = int(refundable["refundable"])
+                if eligible > 0:
+                    payments = [p for p in repo.list_payments(self.db, booking_id)
+                                if p["status"] == "recorded"]
+                    if payments:
+                        largest = max(payments, key=lambda p: int(p["amount"]))
+                        refund_id = finance_repo.insert_refund(
+                            self.db, payment_id=int(largest["id"]),
+                            booking_id=booking_id, amount=eligible,
+                            reason="Service change reduced the contract value "
+                                   f"({format_money(booking.total_amount)} -> "
+                                   f"{format_money(new_total)}).",
+                            method="cash", created_by=employee.id, conn=conn)
+            change_id = repo.insert_booking_service_change(
+                self.db, booking_id=booking_id, employee_id=employee.id,
+                old_services_json=json.dumps(old_services, ensure_ascii=False),
+                new_services_json=json.dumps(new_services, ensure_ascii=False),
+                old_total=booking.total_amount, new_total=new_total,
+                delta=delta, due_at=due_at, refund_id=refund_id,
+                contract_action="note", reason=str(reason or ""), conn=conn)
+            repo.insert_booking_history(
+                self.db, booking_id=booking_id, employee_id=employee.id,
+                action="services_changed",
+                old_value=json.dumps(old_services, ensure_ascii=False),
+                new_value=json.dumps(new_services, ensure_ascii=False),
+                reason=f"{reason} Price {format_money(booking.total_amount)} "
+                       f"-> {format_money(new_total)}"
+                       + (f"; increase due {due_at[:10]}." if due_at else ".")
+                       + (f" Refund #{refund_id} pending approval."
+                          if refund_id else ""),
+                conn=conn)
+            audit_service.record(
+                self.db, employee_id=employee.id, action="booking.services_changed",
+                entity_type="booking", entity_id=booking_id,
+                old_value={"services": old_services,
+                           "total_amount": booking.total_amount},
+                new_value={"services": new_services, "total_amount": new_total,
+                           "delta": delta, "due_at": due_at,
+                           "refund_id": refund_id},
+                description=f"Booking {booking.number} services changed: {reason}.",
+                conn=conn)
+            notify(self.db, type="booking_services_changed",
+                   title=f"Services changed — {booking.number}",
+                   body=f"Booking {booking.number} services changed; price "
+                        f"{format_money(booking.total_amount)} -> "
+                        f"{format_money(new_total)}.",
+                   title_key="notif.booking_services_changed.title",
+                   body_key="notif.booking_services_changed.body",
+                   data={"number": booking.number,
+                         "old": format_money(booking.total_amount),
+                         "new": format_money(new_total)},
+                   entity_type="booking", entity_id=booking_id, conn=conn)
+        contract_action = "note"
+        if delta != 0:
+            contract = contract_repo.get_contract_by_booking(self.db, booking_id)
+            if contract is not None:
+                try:
+                    from .contract_service import ContractService
+
+                    ContractService(self.db, self.settings).create_new_version(
+                        employee, int(contract["id"]))
+                    contract_action = "new_version"
+                    self.db.execute(
+                        "UPDATE booking_service_changes SET contract_action = ? WHERE id = ?",
+                        (contract_action, change_id))
+                except Exception:  # pragma: no cover - version failure path
+                    logger.warning(
+                        "Service change #%s committed but contract version "
+                        "creation failed; a new version is still required.",
+                        change_id)
+                    repo.insert_booking_history(
+                        self.db, booking_id=booking_id, employee_id=employee.id,
+                        action="services_changed",
+                        old_value="", new_value="",
+                        reason="Contract version creation failed — a new "
+                               "contract version is still required.")
+        logger.info("Booking #%s services changed (total %s -> %s)",
+                    booking_id, booking.total_amount, new_total)
+        updated = self.get_booking(employee, booking_id)
+        assert updated is not None
+        return {
+            "booking": updated, "old_total": booking.total_amount,
+            "new_total": new_total, "delta": delta, "due_at": due_at,
+            "refund_id": refund_id, "contract_action": contract_action,
+            "change_id": change_id,
+        }
+
+    def list_service_changes(self, employee, booking_id: int) -> list[dict]:
+        """The recorded service-change history of one booking (FR-026)."""
+        require_permission(self.db, employee, "booking.view")
+        self._get_or_raise(booking_id)
+        return repo.list_booking_service_changes(self.db, booking_id)
+
+    def list_booking_services(self, employee, booking_id: int) -> list[dict]:
+        """Current service selections of one booking (FR-026 UI helper)."""
+        require_permission(self.db, employee, "booking.view")
+        self._get_or_raise(booking_id)
+        return repo.list_booking_services(self.db, booking_id)
 
     # -- ownership transfer (SRS §8.12) ----------------------------------------
     def transfer_booking(self, employee, booking_id: int, *,

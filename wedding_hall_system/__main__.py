@@ -31,6 +31,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from wedding_hall_system.config.settings import AppSettings  # noqa: E402
 from wedding_hall_system.ui.app import build_app  # noqa: E402
+from wedding_hall_system.utils.exceptions import ConfigurationError  # noqa: E402
 from wedding_hall_system.utils.logging_config import setup_logging  # noqa: E402
 
 
@@ -62,7 +63,18 @@ def main(argv: list[str] | None = None) -> None:
         print("WARNING: LAN mode — the app is reachable from every device "
               "on this network. Restrict access to the trusted venue LAN "
               "(SRS §16.4).")
-    app = build_app(settings)
+    app = None
+    try:
+        app = build_app(settings)
+    except ConfigurationError as exc:
+        # Phase 8 (FR-014): without WEDDING_HALL_ENCRYPTION_KEY the
+        # database cannot be initialised or seeded (National IDs must
+        # never be written in plaintext). Say so plainly instead of
+        # dumping a traceback.
+        print(f"Cannot start: {exc}")
+        print("Set WEDDING_HALL_ENCRYPTION_KEY first — generate one with:")
+        print("  python scripts/generate_encryption_key.py")
+        raise SystemExit(2)
     app.launch(server_name=host, server_port=port, show_error=True)
 
 

@@ -235,7 +235,12 @@ def seed(db: DatabaseManager, iterations: int = HASH_ITERATIONS) -> dict[str, in
 
         # -- Phase 3: example customers (INSERT OR IGNORE by normalized
         # phone — customers has no UNIQUE on the normalized columns, so
-        # check first to stay idempotent). --
+        # check first to stay idempotent). National IDs are encrypted
+        # at rest (Phase 8, FR-014) exactly like the repository does —
+        # never write one in plaintext. Without a configured key this
+        # raises ConfigurationError (fail loudly, never silently store
+        # plaintext for new writes).
+        from ..utils.crypto import blind_index, encrypt_text
         from ..utils.validators import normalize_email, normalize_phone
         for customer in EXAMPLE_CUSTOMERS:
             phone_norm = normalize_phone(customer["phone"])
@@ -244,15 +249,18 @@ def seed(db: DatabaseManager, iterations: int = HASH_ITERATIONS) -> dict[str, in
                 (phone_norm,)).fetchone()
             if existing:
                 continue
+            national_id = customer["national_id"] or ""
             cur = conn.execute(
                 """INSERT INTO customers
                    (full_name, phone, phone_normalized, email,
-                    email_normalized, address, national_id, notes)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                    email_normalized, address, national_id, national_id_hash,
+                    notes)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (customer["full_name"], phone_norm, phone_norm,
                  customer["email"], normalize_email(customer["email"])
                  if customer["email"] else "",
-                 customer["address"], customer["national_id"],
+                 customer["address"], encrypt_text(national_id),
+                 blind_index(national_id),
                  customer["notes"]),
             )
             counts["customers"] = counts.get("customers", 0) + cur.rowcount

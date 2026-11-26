@@ -215,6 +215,12 @@ class HallService:
                     f"{block.start_at.isoformat(timespec='minutes')} to "
                     f"{block.end_at.isoformat(timespec='minutes')}"
                     + (f" — {block.description}" if block.description else ""),
+               title_key="notif.hall_maintenance.title",
+               body_key="notif.hall_maintenance.body",
+               data={"hall_name": hall["name"] if hall else f"hall #{hall_id}",
+                     "type": block.type,
+                     "start": block.start_at.isoformat(timespec="minutes"),
+                     "end": block.end_at.isoformat(timespec="minutes")},
                entity_type="maintenance_block", entity_id=block.id)
         logger.info("Maintenance block id=%s hall=%s", block.id, hall_id)
         return block

@@ -7,6 +7,7 @@ Pagination is LIMIT/OFFSET with a separate COUNT query.
 """
 from __future__ import annotations
 
+from ...utils.crypto import decrypt_text
 from ..database import DatabaseManager
 
 PAGE_SIZE_DEFAULT = 20
@@ -50,9 +51,17 @@ def search_customers(db: DatabaseManager, *, term: str = "",
                   OR phone LIKE ? ESCAPE '\\'
                   OR email LIKE ? ESCAPE '\\'"""
     params = [like, like, like]
-    return _run(db, sql, count, params, sort,
-                {"name": "full_name, id", "phone": "phone, id",
-                 "default": "full_name, id"}, page, page_size)
+    result = _run(db, sql, count, params, sort,
+                  {"name": "full_name, id", "phone": "phone, id",
+                   "default": "full_name, id"}, page, page_size)
+    # Phase 8 (FR-014): the National ID is encrypted at rest; decrypt
+    # here so callers see the same value as everywhere else (services
+    # mask it before display, as before).
+    for row in result["rows"]:
+        if "national_id" in row:
+            row["national_id"] = decrypt_text(row["national_id"])
+        row.pop("national_id_hash", None)
+    return result
 
 
 def search_bookings(db: DatabaseManager, *, term: str = "",

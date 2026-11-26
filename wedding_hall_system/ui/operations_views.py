@@ -1,4 +1,6 @@
-"""Contracts, event plans, tasks, staff and notifications (Phase 4).
+"""Contracts, event plans, tasks, staff and notifications (Phase 4;
+Phase 8: fully bilingual, SRS §16.3; bilingual contract templates;
+notifications rendered in the reader's language).
 
 Thin UI only: parse input, call ONE service method, render the result.
 No SQL and no business rules here. Every handler resolves the session
@@ -8,7 +10,9 @@ action raises gr.Error with the service's message.
 Contracts are versioned HTML documents (no PDF library is permitted
 yet — A-38): viewing a version renders the frozen HTML in the page,
 printable to PDF from the browser. Signed copies are uploaded as files
-and downloaded only through the authorized service handler.
+and downloaded only through the authorized service handler. A contract
+renders from the template's Arabic body when the generating employee's
+language is Arabic and the template has one; otherwise English.
 """
 from __future__ import annotations
 
@@ -27,32 +31,81 @@ from ..logic.staff_service import StaffService
 from ..logic.task_service import TaskService
 from ..utils.exceptions import ApplicationError
 from ..utils.logging_config import get_logger
+from .i18n import (LabelRegistry, format_notification, lang_for_token, t)
 
 logger = get_logger(__name__)
 
+SIG_STATUS_KEYS = {
+    "draft": "ops.sig_draft",
+    "pending_signature": "ops.sig_pending_signature",
+    "partially_signed": "ops.sig_partially_signed",
+    "signed": "ops.sig_signed",
+    "cancelled": "ops.sig_cancelled",
+}
+TASK_STATUS_KEYS = {
+    "pending": "ops.task_status_pending",
+    "in_progress": "ops.task_status_in_progress",
+    "completed": "ops.task_status_completed",
+}
+PRIORITY_KEYS = {
+    "low": "ops.priority_low", "medium": "ops.priority_medium",
+    "high": "ops.priority_high", "urgent": "ops.priority_urgent",
+    "normal": "ops.priority_normal",
+}
+AV_KIND_KEYS = {
+    "available": "ops.av_available",
+    "unavailable": "ops.av_unavailable",
+    "time_off": "ops.av_time_off",
+}
+NOTIF_TYPE_KEYS = {
+    "new_booking": "ops.notif_type_new_booking",
+    "hold_expiring": "ops.notif_type_hold_expiring",
+    "booking_cancelled": "ops.notif_type_booking_cancelled",
+    "booking_rescheduled": "ops.notif_type_booking_rescheduled",
+    "booking_services_changed": "ops.notif_type_booking_services_changed",
+    "payment_received": "ops.notif_type_payment_received",
+    "installment_due": "ops.notif_type_installment_due",
+    "event_approaching": "ops.notif_type_event_approaching",
+    "task_due_soon": "ops.notif_type_task_due_soon",
+    "task_overdue": "ops.notif_type_task_overdue",
+    "task_assigned": "ops.notif_type_task_assigned",
+    "assignment_conflict": "ops.notif_type_assignment_conflict",
+    "contract_awaiting_signature": "ops.notif_type_contract_awaiting_signature",
+    "hall_maintenance": "ops.notif_type_hall_maintenance",
+}
 
-def _md_table(headers: list[str], rows: list[list[str]]) -> str:
+
+def _md_table(headers: list[str], rows: list[list[str]], lang: str) -> str:
     if not rows:
-        return "_No records yet._"
+        return f"_{t(lang, 'common.no_records')}_"
     out = ["| " + " | ".join(headers) + " |",
            "| " + " | ".join("---" for _ in headers) + " |"]
     out += ["| " + " | ".join(str(c) for c in row) + " |" for row in rows]
     return "\n".join(out)
 
 
+def _yes_no(lang: str, value: bool) -> str:
+    return t(lang, "common.yes" if value else "common.no")
+
+
 def build_operations_ui(db: DatabaseManager, auth: AuthService,
-                        settings: AppSettings, session_token) -> None:
+                        settings: AppSettings, session_token) -> dict:
     """Build the Phase 4 tabs. Must be called inside a gr.Blocks
-    context, after the login/main views exist."""
+    context, after the login/main views exist. Returns the
+    LabelRegistry result for the language toggle."""
+    reg = LabelRegistry()
     contracts = ContractService(db, settings)
     tasks = TaskService(db)
     staff = StaffService(db)
     notifications = NotificationService(db)
 
+    def _lang(token) -> str:
+        return lang_for_token(db, auth, token)
+
     def employee(token):
         emp = auth.validate_session(token)
         if emp is None:
-            raise gr.Error("Your session has expired. Please log in again.")
+            raise gr.Error(t(_lang(token), "login.session_expired"))
         return emp
 
     def _system_employee() -> Employee:
@@ -66,79 +119,85 @@ def build_operations_ui(db: DatabaseManager, auth: AuthService,
         return [t["name"] for t in contracts.list_templates(_system_employee())]
 
     # ============================================================== CONTRACTS
-    with gr.Tab("Contracts"):
-        gr.Markdown("### Contracts — versioned HTML documents (printable to PDF "
-                    "from the browser). Generate only from a Confirmed booking; "
-                    "a new version preserves the old ones.")
+    with reg.tab("tab.contracts"):
+        reg.markdown("ops.contracts_heading")
         contracts_list = gr.Markdown("")
-        refresh_contracts_btn = gr.Button("Refresh contracts")
+        refresh_contracts_btn = reg.button("ops.refresh_contracts")
         with gr.Row():
-            gen_booking_id = gr.Number(label="Booking ID", precision=0)
-            gen_template = gr.Dropdown(_template_choices(), label="Template")
-            gen_contract_btn = gr.Button("Generate contract", variant="primary")
+            gen_booking_id = reg.number("ops.gen_booking", precision=0)
+            gen_template = reg.dropdown("ops.gen_template", choices=_template_choices())
+            gen_contract_btn = reg.button("ops.generate_contract", variant="primary")
         with gr.Row():
-            view_contract_id = gr.Number(label="Contract ID", precision=0)
-            view_version = gr.Number(label="Version", precision=0, value=1)
-            view_contract_btn = gr.Button("View version")
+            view_contract_id = reg.number("ops.view_contract_id", precision=0)
+            view_version = reg.number("ops.view_version", precision=0, value=1)
+            view_contract_btn = reg.button("ops.view_version_btn")
         contract_html = gr.HTML("")
         with gr.Row():
-            newver_contract_id = gr.Number(label="Contract ID", precision=0)
-            newver_btn = gr.Button("Create new version (re-render from template)")
+            newver_contract_id = reg.number("ops.newver_contract_id", precision=0)
+            newver_btn = reg.button("ops.new_version")
         with gr.Row():
-            sig_contract_id = gr.Number(label="Contract ID", precision=0)
-            sig_status = gr.Dropdown(
-                ["draft", "pending_signature", "partially_signed", "signed",
-                 "cancelled"], value="pending_signature", label="Signature status")
-            sig_date = gr.Textbox(label="Signature date (YYYY-MM-DD, required to sign)",
-                                  placeholder="2026-11-27")
-            sig_btn = gr.Button("Set signature status")
-        gr.Markdown("#### Signed copy upload")
+            sig_contract_id = reg.number("ops.sig_contract_id", precision=0)
+            sig_status = reg.dropdown_t(
+                "ops.sig_status",
+                [("ops.sig_draft", "draft"),
+                 ("ops.sig_pending_signature", "pending_signature"),
+                 ("ops.sig_partially_signed", "partially_signed"),
+                 ("ops.sig_signed", "signed"),
+                 ("ops.sig_cancelled", "cancelled")],
+                value="pending_signature")
+            sig_date = reg.textbox("ops.sig_date", placeholder="2026-11-27")
+            sig_btn = reg.button("ops.set_signature")
+        reg.markdown("ops.signed_heading")
         with gr.Row():
-            up_contract_id = gr.Number(label="Contract ID", precision=0)
-            up_file = gr.File(label="Signed contract file (PDF, JPG or PNG, max 10 MB)",
-                              type="filepath")
-            up_date = gr.Textbox(label="Signature date (YYYY-MM-DD)",
-                                 placeholder="2026-11-27")
-            up_btn = gr.Button("Upload signed copy", variant="primary")
-        gr.Markdown("#### Attachments")
+            up_contract_id = reg.number("ops.up_contract_id", precision=0)
+            up_file = reg.file("ops.up_file")
+            up_date = reg.textbox("ops.up_date", placeholder="2026-11-27")
+            up_btn = reg.button("ops.upload_signed", variant="primary")
+        reg.markdown("ops.att_heading")
         with gr.Row():
-            att_contract_id = gr.Number(label="Contract ID", precision=0)
-            att_refresh_btn = gr.Button("List attachments")
-            att_download_id = gr.Number(label="Attachment ID to download", precision=0)
-            att_download_btn = gr.Button("Download attachment")
+            att_contract_id = reg.number("ops.att_contract_id", precision=0)
+            att_refresh_btn = reg.button("ops.list_attachments")
+            att_download_id = reg.number("ops.att_download_id", precision=0)
+            att_download_btn = reg.button("ops.download_attachment")
         attachments_list = gr.Markdown("")
-        att_file = gr.File(label="Downloaded attachment")
+        att_file = reg.file("ops.downloaded_file")
 
-        def _contracts_md():
+        def _contracts_md(lang: str):
             rows = [[c.id, c.number, c.booking_id, c.template_name,
-                     c.current_version_id or "—", c.signature_status,
+                     c.current_version_id or "—",
+                     t(lang, SIG_STATUS_KEYS.get(c.signature_status, "ops.sig_draft")),
                      c.signature_date or "—"]
                     for c in contracts.list_contracts(_system_employee())]
-            return _md_table(["ID", "Number", "Booking", "Template",
-                              "Current version", "Signature", "Signed on"], rows)
+            return _md_table(
+                [t(lang, "ops.table_id"), t(lang, "ops.table_number"),
+                 t(lang, "ops.table_booking"), t(lang, "ops.table_template"),
+                 t(lang, "ops.table_current_version"),
+                 t(lang, "ops.table_signature"), t(lang, "ops.table_signed_on")],
+                rows, lang)
 
         def do_refresh_contracts(token):
             employee(token)
-            return _contracts_md()
+            return _contracts_md(_lang(token))
 
         def do_generate_contract(token, booking_id, template_name):
             emp = employee(token)
+            lang = _lang(token)
             if not booking_id:
-                raise gr.Error("Enter a booking ID first.")
+                raise gr.Error(t(lang, "ops.msg_need_booking_id"))
             if not template_name:
-                raise gr.Error("Pick a contract template first.")
+                raise gr.Error(t(lang, "ops.msg_pick_template"))
             try:
                 contract = contracts.generate_contract(
-                    emp, int(booking_id), template_name)
+                    emp, int(booking_id), template_name, lang=lang)
             except ApplicationError as exc:
                 raise gr.Error(str(exc))
-            gr.Info(f"Contract {contract.number} generated (version 1).")
-            return _contracts_md()
+            gr.Info(t(lang, "ops.msg_contract_generated").format(number=contract.number))
+            return _contracts_md(lang)
 
         def do_view_contract(token, contract_id, version):
             emp = employee(token)
             if not contract_id:
-                raise gr.Error("Enter a contract ID first.")
+                raise gr.Error(t(_lang(token), "ops.msg_need_contract_id"))
             try:
                 body = contracts.get_version_body(
                     emp, int(contract_id), int(version or 1))
@@ -148,34 +207,39 @@ def build_operations_ui(db: DatabaseManager, auth: AuthService,
 
         def do_new_version(token, contract_id):
             emp = employee(token)
+            lang = _lang(token)
             if not contract_id:
-                raise gr.Error("Enter a contract ID first.")
+                raise gr.Error(t(lang, "ops.msg_need_contract_id"))
             try:
-                version = contracts.create_new_version(emp, int(contract_id))
+                version = contracts.create_new_version(emp, int(contract_id), lang=lang)
             except ApplicationError as exc:
                 raise gr.Error(str(exc))
-            gr.Info(f"Version {version.version} created; older versions preserved.")
-            return _contracts_md()
+            gr.Info(t(lang, "ops.msg_version_created").format(version=version.version))
+            return _contracts_md(lang)
 
         def do_set_signature(token, contract_id, status, date):
             emp = employee(token)
+            lang = _lang(token)
             if not contract_id:
-                raise gr.Error("Enter a contract ID first.")
+                raise gr.Error(t(lang, "ops.msg_need_contract_id"))
             try:
                 contract = contracts.set_signature_status(
                     emp, int(contract_id), status,
                     signature_date=(date or "").strip() or None)
             except ApplicationError as exc:
                 raise gr.Error(str(exc))
-            gr.Info(f"Contract {contract.number} is now {contract.signature_status}.")
-            return _contracts_md()
+            gr.Info(t(lang, "ops.msg_signature_set").format(
+                number=contract.number,
+                status=t(lang, SIG_STATUS_KEYS.get(contract.signature_status, "ops.sig_draft"))))
+            return _contracts_md(lang)
 
         def do_upload_signed(token, contract_id, file_path, date):
             emp = employee(token)
+            lang = _lang(token)
             if not contract_id:
-                raise gr.Error("Enter a contract ID first.")
+                raise gr.Error(t(lang, "ops.msg_need_contract_id"))
             if not file_path:
-                raise gr.Error("Choose a file to upload.")
+                raise gr.Error(t(lang, "ops.msg_need_file"))
             try:
                 result = contracts.upload_signed_copy(
                     emp, int(contract_id), str(file_path),
@@ -183,28 +247,30 @@ def build_operations_ui(db: DatabaseManager, auth: AuthService,
                     signature_date=(date or "").strip())
             except ApplicationError as exc:
                 raise gr.Error(str(exc))
-            gr.Info(f"Signed copy stored (sha256 {result['sha256'][:12]}…); "
-                    "contract marked signed.")
-            return _contracts_md()
+            gr.Info(t(lang, "ops.msg_signed_stored").format(hash=result["sha256"][:12]))
+            return _contracts_md(lang)
 
         def do_list_attachments(token, contract_id):
             emp = employee(token)
+            lang = _lang(token)
             if not contract_id:
-                raise gr.Error("Enter a contract ID first.")
+                raise gr.Error(t(lang, "ops.msg_need_contract_id"))
             try:
                 rows = contracts.list_attachments(emp, int(contract_id))
             except ApplicationError as exc:
                 raise gr.Error(str(exc))
             return _md_table(
-                ["ID", "Original name", "Category", "Size (bytes)",
-                 "Uploaded by", "Uploaded at"],
+                [t(lang, "ops.table_id"), t(lang, "ops.table_original_name"),
+                 t(lang, "ops.table_category"), t(lang, "ops.table_size"),
+                 t(lang, "ops.table_uploaded_by"), t(lang, "ops.table_uploaded_at")],
                 [[r["id"], r["original_filename"], r["category"], r["size_bytes"],
-                  r["uploaded_by"], r["uploaded_at"]] for r in rows])
+                  r["uploaded_by"], r["uploaded_at"]] for r in rows], lang)
 
         def do_download_attachment(token, attachment_id):
             emp = employee(token)
+            lang = _lang(token)
             if not attachment_id:
-                raise gr.Error("Enter an attachment ID first.")
+                raise gr.Error(t(lang, "ops.msg_need_attachment_id"))
             try:
                 path = contracts.download_attachment(emp, int(attachment_id))
             except ApplicationError as exc:
@@ -235,161 +301,181 @@ def build_operations_ui(db: DatabaseManager, auth: AuthService,
                                outputs=[att_file])
 
     # ==================================================== CONTRACT TEMPLATES
-    with gr.Tab("Contract Templates"):
-        gr.Markdown("### Contract templates — stored as settings rows. "
-                    "Placeholders use `{{name}}` (see the template list for the "
-                    "allowed names). Changing a template never changes contracts "
-                    "already generated from it.")
+    with reg.tab("tab.contract_templates"):
+        reg.markdown("ops.templates_heading")
         templates_list = gr.Markdown("")
-        refresh_templates_btn = gr.Button("Refresh templates")
-        tpl_name = gr.Textbox(label="Template name")
-        tpl_body = gr.Textbox(label="Template body (HTML with {{placeholders}})",
-                              lines=12)
+        refresh_templates_btn = reg.button("ops.refresh_templates")
+        tpl_name = reg.textbox("ops.tpl_name")
+        tpl_body = reg.textbox("ops.tpl_body", lines=12)
+        tpl_body_ar = reg.textbox("ops.tpl_body_ar", lines=12)
         with gr.Row():
-            tpl_create_btn = gr.Button("Create template", variant="primary")
-            tpl_update_btn = gr.Button("Update template")
-            tpl_delete_btn = gr.Button("Delete template")
+            tpl_create_btn = reg.button("ops.create_template", variant="primary")
+            tpl_update_btn = reg.button("ops.update_template")
+            tpl_delete_btn = reg.button("ops.delete_template")
 
-        def _templates_md():
-            rows = [[t["name"], t["key"], f"{len(t['body'])} chars"]
+        def _templates_md(lang: str):
+            rows = [[t["name"], t["key"],
+                     f"{len(t['body'])} {t(lang, 'ops.chars')}"]
                     for t in contracts.list_templates(_system_employee())]
-            return _md_table(["Name", "Settings key", "Body length"], rows)
+            return _md_table(
+                [t(lang, "ops.table_name"), t(lang, "ops.table_key"),
+                 t(lang, "ops.table_body_length")], rows, lang)
 
         def do_refresh_templates(token):
             employee(token)
-            return _templates_md()
+            return _templates_md(_lang(token))
 
-        def do_tpl_save(token, name, body, update: bool):
+        def do_tpl_save(token, name, body, body_ar, update: bool):
             emp = employee(token)
+            lang = _lang(token)
             try:
                 if update:
-                    contracts.update_template(emp, name=name, body=body or "")
-                    gr.Info(f"Template {name!r} updated.")
+                    contracts.update_template(emp, name=name, body=body or "",
+                                              body_ar=body_ar or None)
+                    gr.Info(t(lang, "ops.msg_template_updated").format(name=name))
                 else:
-                    contracts.create_template(emp, name=name, body=body or "")
-                    gr.Info(f"Template {name!r} created.")
+                    contracts.create_template(emp, name=name, body=body or "",
+                                              body_ar=body_ar or None)
+                    gr.Info(t(lang, "ops.msg_template_created").format(name=name))
             except ApplicationError as exc:
                 raise gr.Error(str(exc))
-            return _templates_md()
+            return _templates_md(lang)
 
         def do_tpl_delete(token, name):
             emp = employee(token)
+            lang = _lang(token)
             try:
                 contracts.delete_template(emp, name=name)
             except ApplicationError as exc:
                 raise gr.Error(str(exc))
-            gr.Info(f"Template {name!r} deleted.")
-            return _templates_md()
+            gr.Info(t(lang, "ops.msg_template_deleted").format(name=name))
+            return _templates_md(lang)
 
         refresh_templates_btn.click(do_refresh_templates, inputs=[session_token],
                                     outputs=[templates_list])
-        tpl_create_btn.click(lambda t, n, b: do_tpl_save(t, n, b, False),
-                             inputs=[session_token, tpl_name, tpl_body],
+        tpl_create_btn.click(lambda t, n, b, ba: do_tpl_save(t, n, b, ba, False),
+                             inputs=[session_token, tpl_name, tpl_body, tpl_body_ar],
                              outputs=[templates_list])
-        tpl_update_btn.click(lambda t, n, b: do_tpl_save(t, n, b, True),
-                             inputs=[session_token, tpl_name, tpl_body],
+        tpl_update_btn.click(lambda t, n, b, ba: do_tpl_save(t, n, b, ba, True),
+                             inputs=[session_token, tpl_name, tpl_body, tpl_body_ar],
                              outputs=[templates_list])
         tpl_delete_btn.click(do_tpl_delete, inputs=[session_token, tpl_name],
                              outputs=[templates_list])
 
     # ================================================== EVENT PLANS & TASKS
-    with gr.Tab("Event Plans & Tasks"):
-        gr.Markdown("### Event plans — auto-generated from a task template for a "
-                    "Confirmed booking (one plan per booking). Assignments warn "
-                    "on staff conflicts but never block (SRS §7.4).")
+    with reg.tab("tab.event_plans"):
+        reg.markdown("ops.plans_heading")
         plan_md = gr.Markdown("")
         with gr.Row():
-            plan_booking_id = gr.Number(label="Booking ID", precision=0)
-            plan_template_id = gr.Number(label="Template ID (empty = auto-match)",
-                                         precision=0)
-            plan_gen_btn = gr.Button("Generate event plan", variant="primary")
-            plan_view_btn = gr.Button("View event plan")
-        gr.Markdown("#### Task templates")
+            plan_booking_id = reg.number("ops.plan_booking", precision=0)
+            plan_template_id = reg.number("ops.plan_template", precision=0)
+            plan_gen_btn = reg.button("ops.generate_plan", variant="primary")
+            plan_view_btn = reg.button("ops.view_plan")
+        reg.markdown("ops.task_templates_heading")
         task_templates_list = gr.Markdown("")
-        refresh_task_templates_btn = gr.Button("Refresh task templates")
+        refresh_task_templates_btn = reg.button("ops.refresh_task_templates")
         with gr.Row():
-            tt_name = gr.Textbox(label="Template name")
-            tt_event_type_id = gr.Number(label="Event type ID (empty = any)",
-                                         precision=0)
-            tt_package_id = gr.Number(label="Package ID (empty = any)", precision=0)
-        tt_items = gr.Textbox(
-            label="Items — one per line: name | description | due offset (min before event) | priority",
-            lines=4,
-            placeholder="Confirm hall setup and seating | Check tables and stage | 180 | high")
-        tt_create_btn = gr.Button("Create task template", variant="primary")
-        gr.Markdown("#### Assign / update a task")
+            tt_name = reg.textbox("ops.tt_name")
+            tt_event_type_id = reg.number("ops.tt_event_type", precision=0)
+            tt_package_id = reg.number("ops.tt_package", precision=0)
+        tt_items = reg.textbox("ops.tt_items", lines=4,
+                               placeholder_key="ops.tt_items_hint")
+        tt_create_btn = reg.button("ops.create_task_template", variant="primary")
+        reg.markdown("ops.assign_heading")
         with gr.Row():
-            asg_task_id = gr.Number(label="Task ID", precision=0)
-            asg_employee_id = gr.Number(label="Assign to employee ID", precision=0)
-            asg_btn = gr.Button("Assign task", variant="primary")
+            asg_task_id = reg.number("ops.asg_task", precision=0)
+            asg_employee_id = reg.number("ops.asg_employee", precision=0)
+            asg_btn = reg.button("ops.assign_task", variant="primary")
         with gr.Row():
-            st_task_id = gr.Number(label="Task ID", precision=0)
-            st_status = gr.Dropdown(["pending", "in_progress", "completed"],
-                                    label="New status")
-            st_note = gr.Textbox(label="Note (optional)")
-            st_btn = gr.Button("Update task status")
-        gr.Markdown("#### Edit a generated task (Manager)")
+            st_task_id = reg.number("ops.st_task", precision=0)
+            st_status = reg.dropdown_t(
+                "ops.st_status",
+                [("ops.task_status_pending", "pending"),
+                 ("ops.task_status_in_progress", "in_progress"),
+                 ("ops.task_status_completed", "completed")])
+            st_note = reg.textbox("ops.st_note")
+            st_btn = reg.button("ops.update_status")
+        reg.markdown("ops.edit_heading")
         with gr.Row():
-            edit_task_id = gr.Number(label="Task ID", precision=0)
-            edit_name = gr.Textbox(label="New name (empty = unchanged)")
-            edit_desc = gr.Textbox(label="New description (empty = unchanged)")
-            edit_priority = gr.Dropdown(["", "low", "medium", "high", "urgent"],
-                                        value="", label="New priority")
-            edit_due = gr.Textbox(label="New due date/time (YYYY-MM-DD HH:MM, empty = unchanged)")
-            edit_service_id = gr.Number(label="Link to service ID (empty = unchanged)",
-                                        precision=0)
-            edit_btn = gr.Button("Update task details")
+            edit_task_id = reg.number("ops.edit_task", precision=0)
+            edit_name = reg.textbox("ops.edit_name")
+            edit_desc = reg.textbox("ops.edit_desc")
+            edit_priority = reg.dropdown_t(
+                "ops.edit_priority",
+                [("ops.priority_none", ""),
+                 ("ops.priority_low", "low"),
+                 ("ops.priority_medium", "medium"),
+                 ("ops.priority_high", "high"),
+                 ("ops.priority_urgent", "urgent")],
+                value="")
+            edit_due = reg.textbox("ops.edit_due")
+            edit_service_id = reg.number("ops.edit_service", precision=0)
+            edit_btn = reg.button("ops.update_task")
         with gr.Row():
-            hist_task_id = gr.Number(label="Task ID", precision=0)
-            hist_btn = gr.Button("Show task history")
+            hist_task_id = reg.number("ops.hist_task", precision=0)
+            hist_btn = reg.button("ops.show_history")
         task_hist_md = gr.Markdown("")
 
-        def _task_templates_md():
+        def _task_templates_md(lang: str):
             rows = []
-            for t in tasks.list_templates(_system_employee()):
-                rows.append([t["id"], t["name"], t["event_type_id"] or "any",
-                             t["package_id"] or "any", len(t["items"])])
-            return _md_table(["ID", "Name", "Event type", "Package", "Items"], rows)
+            for tmpl in tasks.list_templates(_system_employee()):
+                rows.append([tmpl["id"], tmpl["name"],
+                             tmpl["event_type_id"] or t(lang, "common.any"),
+                             tmpl["package_id"] or t(lang, "common.any"),
+                             len(tmpl["items"])])
+            return _md_table(
+                [t(lang, "ops.table_id"), t(lang, "ops.table_name"),
+                 t(lang, "ops.table_event_type"), t(lang, "ops.table_package"),
+                 t(lang, "ops.table_items")], rows, lang)
 
-        def _plan_tasks_md(plan: dict) -> str:
+        def _plan_tasks_md(plan: dict, lang: str) -> str:
             rows = [[t["id"], t["name"], t["assigned_to"] or "—",
-                     t["due_at"] or "—", t["priority"], t["status"]]
+                     t["due_at"] or "—",
+                     t(lang, PRIORITY_KEYS.get(t["priority"], "ops.priority_medium")),
+                     t(lang, TASK_STATUS_KEYS.get(t["status"], "ops.task_status_pending"))]
                     for t in plan["tasks"]]
             template = plan.get("template_name") or "—"
-            return (f"**Event plan #{plan['id']}** — template {template}  \n"
-                    + _md_table(["ID", "Task", "Assigned to", "Due at",
-                                 "Priority", "Status"], rows))
+            return (t(lang, "ops.plan_line").format(id=plan["id"], template=template)
+                    + "  \n"
+                    + _md_table(
+                        [t(lang, "ops.table_id"), t(lang, "ops.table_task"),
+                         t(lang, "ops.table_assigned"), t(lang, "ops.table_due"),
+                         t(lang, "ops.table_priority"), t(lang, "ops.table_status")],
+                        rows, lang))
 
         def do_generate_plan(token, booking_id, template_id):
             emp = employee(token)
+            lang = _lang(token)
             if not booking_id:
-                raise gr.Error("Enter a booking ID first.")
+                raise gr.Error(t(lang, "ops.msg_need_booking_id"))
             try:
                 plan = tasks.generate_event_plan(
                     emp, int(booking_id),
                     template_id=int(template_id) if template_id else None)
             except ApplicationError as exc:
                 raise gr.Error(str(exc))
-            gr.Info(f"Event plan #{plan['id']} generated "
-                    f"({len(plan['tasks'])} task(s)).")
-            return _plan_tasks_md(plan)
+            gr.Info(t(lang, "ops.msg_plan_generated").format(
+                id=plan["id"], n=len(plan["tasks"])))
+            return _plan_tasks_md(plan, lang)
 
         def do_view_plan(token, booking_id):
             emp = employee(token)
+            lang = _lang(token)
             if not booking_id:
-                raise gr.Error("Enter a booking ID first.")
+                raise gr.Error(t(lang, "ops.msg_need_booking_id"))
             try:
                 plan = tasks.get_event_plan(emp, int(booking_id))
             except ApplicationError as exc:
                 raise gr.Error(str(exc))
-            return _plan_tasks_md(plan)
+            return _plan_tasks_md(plan, lang)
 
         def do_refresh_task_templates(token):
             employee(token)
-            return _task_templates_md()
+            return _task_templates_md(_lang(token))
 
         def do_create_task_template(token, name, event_type_id, package_id, items_text):
             emp = employee(token)
+            lang = _lang(token)
             items = []
             for line in (items_text or "").splitlines():
                 parts = [p.strip() for p in line.split("|")]
@@ -398,7 +484,7 @@ def build_operations_ui(db: DatabaseManager, auth: AuthService,
                 try:
                     offset = int(parts[2])
                 except ValueError:
-                    raise gr.Error(f"Due offset must be a number: {line!r}")
+                    raise gr.Error(t(lang, "ops.msg_due_offset_number").format(line=line))
                 items.append({"name": parts[0],
                               "description": parts[1] if len(parts) > 1 else "",
                               "due_offset_min": offset,
@@ -411,45 +497,60 @@ def build_operations_ui(db: DatabaseManager, auth: AuthService,
                     items=items)
             except ApplicationError as exc:
                 raise gr.Error(str(exc))
-            gr.Info(f"Task template {template['name']!r} created.")
-            return _task_templates_md()
+            gr.Info(t(lang, "ops.msg_task_template_created").format(name=template["name"]))
+            return _task_templates_md(lang)
+
+        def _task_rows_md(task_rows: list[dict], lang: str) -> str:
+            return _md_table(
+                [t(lang, "ops.table_id"), t(lang, "ops.table_task"),
+                 t(lang, "ops.table_assigned"), t(lang, "ops.table_due"),
+                 t(lang, "ops.table_status")],
+                [[r["id"], r["name"], r["assigned_to"] or "—",
+                  r["due_at"] or "—",
+                  t(lang, TASK_STATUS_KEYS.get(r["status"], "ops.task_status_pending"))]
+                 for r in task_rows], lang)
 
         def do_assign_task(token, task_id, employee_id):
             emp = employee(token)
+            lang = _lang(token)
             if not task_id or not employee_id:
-                raise gr.Error("Enter a task ID and an employee ID first.")
+                raise gr.Error(t(lang, "ops.msg_need_task_employee"))
             try:
                 result = tasks.assign_task(emp, int(task_id), int(employee_id))
             except ApplicationError as exc:
                 raise gr.Error(str(exc))
             if result.get("warnings"):
-                gr.Info("Assigned WITH warnings: " + "; ".join(result["warnings"]))
+                gr.Info(t(lang, "ops.msg_assigned_warnings").format(
+                    warnings="; ".join(result["warnings"])))
             else:
-                gr.Info(f"Task #{task_id} assigned to employee #{employee_id}.")
-            return _md_table(["ID", "Task", "Assigned to", "Due at", "Status"],
-                             [[result["id"], result["name"],
-                               result["assigned_to"] or "—",
-                               result["due_at"] or "—", result["status"]]])
+                gr.Info(t(lang, "ops.msg_assigned").format(
+                    task=task_id, employee=employee_id))
+            return _task_rows_md([result], lang)
 
         def do_update_status(token, task_id, status, note):
             emp = employee(token)
+            lang = _lang(token)
             if not task_id:
-                raise gr.Error("Enter a task ID first.")
+                raise gr.Error(t(lang, "ops.msg_need_task_id"))
             try:
                 task = tasks.update_task_status(emp, int(task_id), status,
                                                 note=note or "")
             except ApplicationError as exc:
                 raise gr.Error(str(exc))
-            gr.Info(f"Task #{task_id} is now {task.status}.")
-            return _md_table(["ID", "Task", "Assigned to", "Due at", "Status"],
-                             [[task.id, task.name, task.assigned_to or "—",
-                               task.due_at or "—", task.status]])
+            gr.Info(t(lang, "ops.msg_task_status").format(
+                task=task_id,
+                status=t(lang, TASK_STATUS_KEYS.get(task.status, "ops.task_status_pending"))))
+            return _task_rows_md([{"id": task.id, "name": task.name,
+                                  "assigned_to": task.assigned_to,
+                                  "due_at": task.due_at,
+                                  "status": task.status}], lang)
 
         def do_update_task_details(token, task_id, name, desc, priority,
                                    due, service_id):
             emp = employee(token)
+            lang = _lang(token)
             if not task_id:
-                raise gr.Error("Enter a task ID first.")
+                raise gr.Error(t(lang, "ops.msg_need_task_id"))
             try:
                 task = tasks.update_task_details(
                     emp, int(task_id),
@@ -460,23 +561,28 @@ def build_operations_ui(db: DatabaseManager, auth: AuthService,
                     service_id=int(service_id) if service_id else None)
             except ApplicationError as exc:
                 raise gr.Error(str(exc))
-            gr.Info(f"Task #{task_id} updated.")
-            return _md_table(["ID", "Task", "Assigned to", "Due at", "Status"],
-                             [[task.id, task.name, task.assigned_to or "—",
-                               task.due_at or "—", task.status]])
+            gr.Info(t(lang, "ops.msg_task_updated").format(task=task_id))
+            return _task_rows_md([{"id": task.id, "name": task.name,
+                                  "assigned_to": task.assigned_to,
+                                  "due_at": task.due_at,
+                                  "status": task.status}], lang)
 
         def do_task_history(token, task_id):
             emp = employee(token)
+            lang = _lang(token)
             if not task_id:
-                raise gr.Error("Enter a task ID first.")
+                raise gr.Error(t(lang, "ops.msg_need_task_id"))
             try:
                 rows = tasks.task_history(emp, int(task_id))
             except ApplicationError as exc:
                 raise gr.Error(str(exc))
-            return _md_table(["When", "Changed by", "Action", "Old", "New"],
-                             [[r["created_at"], r["employee_id"] or "—", r["action"],
-                               r["old_value"] or "—", r["new_value"] or "—"]
-                              for r in rows])
+            return _md_table(
+                [t(lang, "ops.table_when"), t(lang, "ops.table_changed_by"),
+                 t(lang, "ops.table_action"), t(lang, "ops.table_old"),
+                 t(lang, "ops.table_new")],
+                [[r["created_at"], r["employee_id"] or "—", r["action"],
+                  r["old_value"] or "—", r["new_value"] or "—"]
+                 for r in rows], lang)
 
         plan_gen_btn.click(do_generate_plan,
                            inputs=[session_token, plan_booking_id, plan_template_id],
@@ -504,67 +610,73 @@ def build_operations_ui(db: DatabaseManager, auth: AuthService,
                        outputs=[task_hist_md])
 
     # ================================================================= STAFF
-    with gr.Tab("Staff"):
-        gr.Markdown("### Staff — the login accounts from Phase 1. Manage profiles "
-                    "and availability here; roles are managed with the accounts.")
+    with reg.tab("tab.staff"):
+        reg.markdown("ops.staff_heading")
         staff_list = gr.Markdown("")
-        refresh_staff_btn = gr.Button("Refresh staff")
+        refresh_staff_btn = reg.button("ops.refresh_staff")
         with gr.Row():
-            prof_employee_id = gr.Number(label="Employee ID", precision=0)
-            prof_view_btn = gr.Button("View profile")
+            prof_employee_id = reg.number("ops.prof_employee", precision=0)
+            prof_view_btn = reg.button("ops.view_profile")
         profile_md = gr.Markdown("")
         with gr.Row():
-            upd_employee_id = gr.Number(label="Employee ID", precision=0)
-            upd_full_name = gr.Textbox(label="Full name")
-            upd_phone = gr.Textbox(label="Phone")
-            upd_email = gr.Textbox(label="Email")
-            upd_specialties = gr.Textbox(label="Specialties (comma separated)")
-            upd_btn = gr.Button("Update profile", variant="primary")
-        gr.Markdown("#### Roles and active status (Owner only)")
+            upd_employee_id = reg.number("ops.upd_employee", precision=0)
+            upd_full_name = reg.textbox("ops.upd_full_name")
+            upd_phone = reg.textbox("ops.upd_phone")
+            upd_email = reg.textbox("ops.upd_email")
+            upd_specialties = reg.textbox("ops.upd_specialties")
+            upd_btn = reg.button("ops.update_profile", variant="primary")
+        reg.markdown("ops.roles_heading")
         with gr.Row():
-            roles_employee_id = gr.Number(label="Employee ID", precision=0)
-            roles_text = gr.Textbox(label="Roles (comma separated)",
-                                    placeholder="Staff, Receptionist")
-            roles_btn = gr.Button("Set roles")
+            roles_employee_id = reg.number("ops.roles_employee", precision=0)
+            roles_text = reg.textbox("ops.roles_text", placeholder="Staff, Receptionist")
+            roles_btn = reg.button("ops.set_roles")
         with gr.Row():
-            active_employee_id = gr.Number(label="Employee ID", precision=0)
-            active_check = gr.Checkbox(label="Active account", value=True)
-            active_btn = gr.Button("Set active status")
-        gr.Markdown("#### Availability")
+            active_employee_id = reg.number("ops.active_employee", precision=0)
+            active_check = reg.checkbox("ops.active_check", value=True)
+            active_btn = reg.button("ops.set_active")
+        reg.markdown("ops.avail_heading")
         with gr.Row():
-            av_employee_id = gr.Number(label="Employee ID", precision=0)
-            av_date = gr.Textbox(label="Date (YYYY-MM-DD)", placeholder="2026-12-05")
-            av_kind = gr.Dropdown(["available", "unavailable", "time_off"],
-                                  value="available", label="Kind")
-            av_start = gr.Textbox(label="Start time (HH:MM, optional)")
-            av_end = gr.Textbox(label="End time (HH:MM, optional)")
-            av_note = gr.Textbox(label="Note")
-            av_set_btn = gr.Button("Set availability")
+            av_employee_id = reg.number("ops.av_employee", precision=0)
+            av_date = reg.textbox("ops.av_date", placeholder="2026-12-05")
+            av_kind = reg.dropdown_t(
+                "ops.av_kind",
+                [("ops.av_available", "available"),
+                 ("ops.av_unavailable", "unavailable"),
+                 ("ops.av_time_off", "time_off")],
+                value="available")
+            av_start = reg.textbox("ops.av_start")
+            av_end = reg.textbox("ops.av_end")
+            av_note = reg.textbox("ops.av_note")
+            av_set_btn = reg.button("ops.set_availability")
         with gr.Row():
-            av_list_employee_id = gr.Number(label="Employee ID (empty = all)",
-                                            precision=0)
-            av_list_date = gr.Textbox(label="Date (YYYY-MM-DD, optional)")
-            av_list_btn = gr.Button("List availability")
-            av_del_id = gr.Number(label="Availability entry ID to delete", precision=0)
-            av_del_btn = gr.Button("Delete entry")
+            av_list_employee_id = reg.number("ops.av_list_employee", precision=0)
+            av_list_date = reg.textbox("ops.av_list_date")
+            av_list_btn = reg.button("ops.list_availability")
+            av_del_id = reg.number("ops.av_del_id", precision=0)
+            av_del_btn = reg.button("ops.delete_entry")
         availability_md = gr.Markdown("")
 
-        def _staff_md():
+        def _staff_md(lang: str):
             rows = [[e["id"], e["username"], e["full_name"], e["phone"],
                      e["email"], e["specialties"], ", ".join(e["roles"]),
-                     "yes" if e["is_active"] else "no"]
+                     _yes_no(lang, e["is_active"])]
                     for e in staff.list_employees(_system_employee())]
-            return _md_table(["ID", "Username", "Full name", "Phone", "Email",
-                              "Specialties", "Roles", "Active"], rows)
+            return _md_table(
+                [t(lang, "ops.table_id"), t(lang, "ops.table_username"),
+                 t(lang, "ops.table_full_name"), t(lang, "ops.table_phone"),
+                 t(lang, "ops.table_email"), t(lang, "ops.table_specialties"),
+                 t(lang, "ops.table_roles"), t(lang, "ops.table_active")],
+                rows, lang)
 
         def do_refresh_staff(token):
             employee(token)
-            return _staff_md()
+            return _staff_md(_lang(token))
 
         def do_view_profile(token, employee_id):
             emp = employee(token)
+            lang = _lang(token)
             if not employee_id:
-                raise gr.Error("Enter an employee ID first.")
+                raise gr.Error(t(lang, "ops.msg_need_employee_id"))
             try:
                 profile = staff.get_profile(emp, int(employee_id))
             except ApplicationError as exc:
@@ -572,19 +684,22 @@ def build_operations_ui(db: DatabaseManager, auth: AuthService,
             counts = profile["task_counts"]
             lines = [
                 f"**{profile['full_name']}** (@{profile['username']})",
-                f"Roles: {', '.join(profile['roles']) or '—'}  |  "
-                f"Phone: {profile['phone'] or '—'}  |  Email: {profile['email'] or '—'}",
-                f"Specialties: {profile['specialties'] or '—'}  |  "
-                f"Active: {'yes' if profile['is_active'] else 'no'}",
-                f"Tasks — pending {counts['pending']}, in progress "
-                f"{counts['in_progress']}, completed {counts['completed']}",
+                f"{t(lang, 'ops.profile_roles')}: {', '.join(profile['roles']) or '—'}  |  "
+                f"{t(lang, 'ops.profile_phone')}: {profile['phone'] or '—'}  |  "
+                f"{t(lang, 'ops.profile_email')}: {profile['email'] or '—'}",
+                f"{t(lang, 'ops.profile_specialties')}: {profile['specialties'] or '—'}  |  "
+                f"{t(lang, 'ops.profile_active')}: {_yes_no(lang, profile['is_active'])}",
+                t(lang, "ops.profile_tasks").format(
+                    pending=counts["pending"], in_progress=counts["in_progress"],
+                    completed=counts["completed"]),
             ]
             return "\n\n".join(lines)
 
         def do_update_profile(token, employee_id, full_name, phone, email, specialties):
             emp = employee(token)
+            lang = _lang(token)
             if not employee_id:
-                raise gr.Error("Enter an employee ID first.")
+                raise gr.Error(t(lang, "ops.msg_need_employee_id"))
             try:
                 # Empty fields are left unchanged (clearing a field is not
                 # supported from this screen).
@@ -596,37 +711,41 @@ def build_operations_ui(db: DatabaseManager, auth: AuthService,
                     specialties=(specialties or "").strip() or None)
             except ApplicationError as exc:
                 raise gr.Error(str(exc))
-            gr.Info("Profile updated.")
-            return _staff_md()
+            gr.Info(t(lang, "ops.msg_profile_updated"))
+            return _staff_md(lang)
 
         def do_set_roles(token, employee_id, roles_text):
             emp = employee(token)
+            lang = _lang(token)
             if not employee_id:
-                raise gr.Error("Enter an employee ID first.")
+                raise gr.Error(t(lang, "ops.msg_need_employee_id"))
             roles = [r.strip() for r in (roles_text or "").split(",") if r.strip()]
             try:
                 staff.set_roles(emp, int(employee_id), roles)
             except ApplicationError as exc:
                 raise gr.Error(str(exc))
-            gr.Info(f"Roles updated for employee #{int(employee_id)}.")
-            return _staff_md()
+            gr.Info(t(lang, "ops.msg_roles_updated").format(id=int(employee_id)))
+            return _staff_md(lang)
 
         def do_set_active(token, employee_id, active):
             emp = employee(token)
+            lang = _lang(token)
             if not employee_id:
-                raise gr.Error("Enter an employee ID first.")
+                raise gr.Error(t(lang, "ops.msg_need_employee_id"))
             try:
                 staff.update_profile(emp, int(employee_id), is_active=bool(active))
             except ApplicationError as exc:
                 raise gr.Error(str(exc))
-            gr.Info(f"Employee #{int(employee_id)} is now "
-                    f"{'active' if active else 'inactive'}.")
-            return _staff_md()
+            gr.Info(t(lang, "ops.msg_employee_active").format(
+                id=int(employee_id),
+                state=t(lang, "common.active" if active else "common.inactive")))
+            return _staff_md(lang)
 
         def do_set_availability(token, employee_id, date, kind, start, end, note):
             emp = employee(token)
+            lang = _lang(token)
             if not employee_id:
-                raise gr.Error("Enter an employee ID first.")
+                raise gr.Error(t(lang, "ops.msg_need_employee_id"))
             try:
                 staff.set_availability(
                     emp, int(employee_id), date=(date or "").strip(),
@@ -635,31 +754,38 @@ def build_operations_ui(db: DatabaseManager, auth: AuthService,
                     kind=kind, note=note or "")
             except ApplicationError as exc:
                 raise gr.Error(str(exc))
-            gr.Info(f"Availability set for employee #{int(employee_id)} on {date}.")
-            return _staff_md()
+            gr.Info(t(lang, "ops.msg_avail_set").format(id=int(employee_id), date=date))
+            return _staff_md(lang)
 
         def do_list_availability(token, employee_id, date):
             emp = employee(token)
+            lang = _lang(token)
             try:
                 rows = staff.list_availability(
                     emp, target_id=int(employee_id) if employee_id else None,
                     date=(date or "").strip() or None)
             except ApplicationError as exc:
                 raise gr.Error(str(exc))
-            return _md_table(["ID", "Employee", "Date", "Start", "End", "Kind", "Note"],
-                             [[r["id"], r["employee_id"], r["date"],
-                               r["start_time"] or "—", r["end_time"] or "—",
-                               r["kind"], r["note"] or "—"] for r in rows])
+            return _md_table(
+                [t(lang, "ops.table_id"), t(lang, "ops.table_employee"),
+                 t(lang, "ops.table_date"), t(lang, "ops.table_start"),
+                 t(lang, "ops.table_end"), t(lang, "ops.table_kind"),
+                 t(lang, "ops.table_note")],
+                [[r["id"], r["employee_id"], r["date"],
+                  r["start_time"] or "—", r["end_time"] or "—",
+                  t(lang, AV_KIND_KEYS.get(r["kind"], "ops.av_available")),
+                  r["note"] or "—"] for r in rows], lang)
 
         def do_delete_availability(token, entry_id):
             emp = employee(token)
+            lang = _lang(token)
             if not entry_id:
-                raise gr.Error("Enter an availability entry ID first.")
+                raise gr.Error(t(lang, "ops.msg_need_avail_id"))
             try:
                 staff.delete_availability(emp, int(entry_id))
             except ApplicationError as exc:
                 raise gr.Error(str(exc))
-            gr.Info(f"Availability entry #{int(entry_id)} deleted.")
+            gr.Info(t(lang, "ops.msg_avail_deleted").format(id=int(entry_id)))
             return ""
 
         refresh_staff_btn.click(do_refresh_staff, inputs=[session_token],
@@ -687,30 +813,37 @@ def build_operations_ui(db: DatabaseManager, auth: AuthService,
                          outputs=[availability_md])
 
     # ========================================================== NOTIFICATIONS
-    with gr.Tab("Notifications"):
-        gr.Markdown("### Notifications — in-app inbox. Created on assignments, "
-                    "status changes and contract events.")
+    with reg.tab("tab.notifications"):
+        reg.markdown("ops.notif_heading")
         notif_md = gr.Markdown("")
-        refresh_notif_btn = gr.Button("Refresh inbox")
+        refresh_notif_btn = reg.button("ops.refresh_inbox")
         with gr.Row():
-            notif_show_read = gr.Checkbox(label="Show read notifications", value=False)
-            notif_id = gr.Number(label="Notification ID to mark read", precision=0)
-            notif_read_btn = gr.Button("Mark as read")
-            notif_read_all_btn = gr.Button("Mark all as read")
-        gr.Markdown("#### Notification configuration (Owner-editable setting "
-                    "`notification.config` — type → recipient roles and priority)")
+            notif_show_read = reg.checkbox("ops.notif_show_read", value=False)
+            notif_id = reg.number("ops.notif_id", precision=0)
+            notif_read_btn = reg.button("ops.mark_read")
+            notif_read_all_btn = reg.button("ops.mark_all_read")
+        reg.markdown("ops.notif_config_heading")
         notif_config_md = gr.Markdown("")
 
-        def _notif_md(emp, show_read: bool):
+        def _notif_md(emp, lang, show_read: bool):
             items = notifications.inbox(emp, unread_only=not show_read)
-            rows = [[n["id"], n["type"], n["title"], n["body"][:80],
-                     n["priority"], "yes" if n["is_read"] else "no",
-                     n["created_at"]] for n in items]
-            return _md_table(["ID", "Type", "Title", "Message", "Priority",
-                              "Read", "Created"], rows)
+            rows = []
+            for n in items:
+                title, body = format_notification(lang, n)
+                rows.append([n["id"],
+                             t(lang, NOTIF_TYPE_KEYS.get(n["type"], "ops.notif_type_new_booking")),
+                             title, body[:80],
+                             t(lang, PRIORITY_KEYS.get(n["priority"], "ops.priority_normal")),
+                             _yes_no(lang, n["is_read"]), n["created_at"]])
+            return _md_table(
+                [t(lang, "ops.table_id"), t(lang, "ops.table_type"),
+                 t(lang, "ops.table_title"), t(lang, "ops.table_message"),
+                 t(lang, "ops.table_priority"), t(lang, "ops.table_read"),
+                 t(lang, "ops.table_created")], rows, lang)
 
         def do_refresh_notif(token, show_read):
             emp = employee(token)
+            lang = _lang(token)
             unread = notifications.unread_count(emp)
             # The config is Owner-managed (settings.view); other roles
             # just see the note.
@@ -718,26 +851,28 @@ def build_operations_ui(db: DatabaseManager, auth: AuthService,
                 config = notifications.get_config(emp)
                 config_text = "```json\n" + json.dumps(config, indent=2) + "\n```"
             else:
-                config_text = "_Notification configuration is managed by the Owner._"
-            gr.Info(f"{unread} unread notification(s).")
-            return _notif_md(emp, show_read), config_text
+                config_text = f"_{t(lang, 'ops.msg_config_owner_only')}_"
+            gr.Info(t(lang, "ops.msg_unread").format(count=unread))
+            return _notif_md(emp, lang, show_read), config_text
 
         def do_mark_read(token, notification_id):
             emp = employee(token)
+            lang = _lang(token)
             if not notification_id:
-                raise gr.Error("Enter a notification ID first.")
+                raise gr.Error(t(lang, "ops.msg_need_notif_id"))
             try:
                 notifications.mark_read(emp, int(notification_id))
             except ApplicationError as exc:
                 raise gr.Error(str(exc))
-            gr.Info(f"Notification #{int(notification_id)} marked as read.")
-            return _notif_md(emp, False)
+            gr.Info(t(lang, "ops.msg_notif_read").format(id=int(notification_id)))
+            return _notif_md(emp, lang, False)
 
         def do_mark_all_read(token):
             emp = employee(token)
+            lang = _lang(token)
             count = notifications.mark_all_read(emp)
-            gr.Info(f"{count} notification(s) marked as read.")
-            return _notif_md(emp, False)
+            gr.Info(t(lang, "ops.msg_notif_all_read").format(count=count))
+            return _notif_md(emp, lang, False)
 
         refresh_notif_btn.click(do_refresh_notif,
                                 inputs=[session_token, notif_show_read],
@@ -746,3 +881,5 @@ def build_operations_ui(db: DatabaseManager, auth: AuthService,
                              outputs=[notif_md])
         notif_read_all_btn.click(do_mark_all_read, inputs=[session_token],
                                  outputs=[notif_md])
+
+    return reg.result()

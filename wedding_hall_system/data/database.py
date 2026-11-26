@@ -18,7 +18,13 @@ from ..utils.logging_config import get_logger
 
 logger = get_logger(__name__)
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
+
+# Python data migrations: {schema version: callable(conn)}. SQL files
+# cannot encrypt (Fernet needs Python), so the matching Python step
+# runs right after its SQL file, on the same connection, before the
+# version is recorded.
+PYTHON_MIGRATIONS = {5: "migrate_005_encrypt_national_ids"}
 
 
 class DatabaseManager:
@@ -114,6 +120,11 @@ class DatabaseManager:
                 if number <= current or number <= 1:
                     continue
                 self._apply_migration(conn, path)
+                python_step = PYTHON_MIGRATIONS.get(number)
+                if python_step is not None:
+                    from . import migrations_py
+
+                    getattr(migrations_py, python_step)(conn)
                 conn.execute(
                     "INSERT OR IGNORE INTO schema_version (version) VALUES (?)",
                     (number,),

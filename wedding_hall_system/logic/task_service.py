@@ -18,7 +18,7 @@ statuses). Every assignment and status change is written to
 """
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from ..data.database import DatabaseManager
 from ..data.repositories import (
@@ -313,12 +313,19 @@ class TaskService:
                    body=f"You were assigned '{task['name']}'"
                         + (f" (due {task['due_at']})" if task["due_at"] else "")
                         + (f" Warning: {'; '.join(warnings)}" if warnings else ""),
+                   title_key="notif.task_assigned.title",
+                   body_key="notif.task_assigned.body",
+                   data={"title": task["name"]},
                    entity_type="task", entity_id=task_id, conn=conn)
             if warnings:
                 notify(self.db, type="assignment_conflict",
                        title=f"Assignment conflict on task #{task_id}",
                        body=f"Task #{task_id} assigned to employee "
                             f"#{assigned_to} with conflict(s): {'; '.join(warnings)}",
+                       title_key="notif.assignment_conflict.title",
+                       body_key="notif.assignment_conflict.body",
+                       data={"id": task_id, "employee": assigned_to,
+                             "warnings": "; ".join(warnings)},
                        entity_type="task", entity_id=task_id, conn=conn)
         result = dict(ops_repo.get_task(self.db, task_id))
         result["warnings"] = warnings
@@ -368,6 +375,9 @@ class TaskService:
                        recipient_employee_id=int(task["assigned_to"]),
                        title=f"Task update: {task['name']}",
                        body=f"Task '{task['name']}' status changed to {status}.",
+                       title_key="notif.task_status_changed.title",
+                       body_key="notif.task_status_changed.body",
+                       data={"title": task["name"], "status": status},
                        entity_type="task", entity_id=task_id, conn=conn)
         return self._row_to_task(ops_repo.get_task(self.db, task_id))
 
@@ -459,7 +469,16 @@ class TaskService:
         ``task_overdue`` (high priority). Each fires at most once per
         task per 24h (A-50 pattern). Returns counts, for tests."""
         now = now or datetime.now()
-        since = (now - timedelta(hours=24)).isoformat(timespec="seconds")
+        # A-81: the dedup window is measured against
+        # notifications.created_at (SQLite CURRENT_TIMESTAMP, UTC), so
+        # it is computed from UTC now in 'YYYY-MM-DD HH:MM:SS' format.
+        # A local-time window both shrank the effective window to ~22h
+        # (A-56) and, with the 'T' separator of .isoformat(), broke the
+        # dedup entirely 00:00–02:00 Africa/Cairo. ``now`` (local) is
+        # still used for the due-date comparisons below, which compare
+        # against naive-local stored values.
+        since = (datetime.now(timezone.utc) - timedelta(hours=24)).strftime(
+            "%Y-%m-%d %H:%M:%S")
         due_soon = 0
         overdue = 0
         for row in ops_repo.list_tasks(self.db):
@@ -479,6 +498,9 @@ class TaskService:
                         entity_id=task_id, since_iso=since):
                     continue
                 notify(self.db, type=kind, title=title, body=body,
+                       title_key=f"notif.{kind}.title",
+                       body_key=f"notif.{kind}.body",
+                       data={"title": row["name"], "when": row["due_at"]},
                        recipient_employee_id=int(row["assigned_to"]),
                        entity_type="task", entity_id=task_id)
                 overdue += 1
@@ -491,6 +513,9 @@ class TaskService:
                 notify(self.db, type=kind,
                        title=f"Task due soon — {row['name']}",
                        body=f"Task {row['name']!r} is due {row['due_at']}.",
+                       title_key="notif.task_due_soon.title",
+                       body_key="notif.task_due_soon.body",
+                       data={"title": row["name"], "when": row["due_at"]},
                        recipient_employee_id=int(row["assigned_to"]),
                        entity_type="task", entity_id=task_id)
                 due_soon += 1

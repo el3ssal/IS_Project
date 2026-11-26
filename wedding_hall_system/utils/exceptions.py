@@ -52,3 +52,10 @@ class DatabaseOperationError(ApplicationError):
 
 class AttachmentValidationError(ApplicationError):
     """An uploaded file failed type/size/content validation."""
+
+
+class ConfigurationError(ApplicationError):
+    """The app is misconfigured (missing/invalid encryption key,
+    bad setting value). The message always tells the operator how
+    to fix it; the app refuses to run the affected path instead of
+    silently degrading (FR-014: never fall back to plaintext)."""

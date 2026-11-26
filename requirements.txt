@@ -4,3 +4,7 @@
 # dependency: the instructor deck's sequence diagrams prescribe a
 # Gradio browser UI (GAP G-04) and the SRS (§0.1, §17) names it.
 gradio>=5,<7
+# Phase 8 (FR-014): vetted dependency for field-level encryption
+# (Fernet = AES-128-CBC + HMAC-SHA256). No other crypto is used anywhere;
+# the key comes from the WEDDING_HALL_ENCRYPTION_KEY environment variable.
+cryptography>=50,<51

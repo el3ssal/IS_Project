@@ -60,13 +60,28 @@ def notify(db: DatabaseManager, *, type: str, title: str, body: str = "",
            priority: str | None = None, entity_type: str = "",
            entity_id: int | None = None,
            recipient_employee_id: int | None = None,
-           recipient_role_id: int | None = None, conn=None) -> list[int]:
+           recipient_role_id: int | None = None,
+           title_key: str | None = None, body_key: str | None = None,
+           data: dict | None = None, conn=None) -> list[int]:
     """Create notification row(s) and return their ids. When neither
     recipient is given, recipients resolve from the Owner-configured
     mapping for the type; when the type has no mapping at all, the
     notification goes to the Owner role so it is never silently dropped.
-    Unknown types raise ValidationError (via the Notification model)."""
+    Unknown types raise ValidationError (via the Notification model).
+
+    Phase 8 (NFR-005): ``title_key``/``body_key``/``data`` store the
+    i18n keys + params in ``notifications.data_json`` so the inbox can
+    render the notification in each reader's language. ``title``/``body``
+    stay as the English fallback for rows read without a translation
+    (older rows, or a key that fails to render)."""
     Notification(type=type, title=title)  # validates type/priority early
+    data_json = None
+    if title_key and body_key:
+        import json as _json
+
+        data_json = _json.dumps(
+            {"title_key": title_key, "body_key": body_key,
+             "params": dict(data or {})}, ensure_ascii=False)
     config = get_notification_config(db)
     role_ids: list[int] = []
     if recipient_role_id is not None:
@@ -90,12 +105,14 @@ def notify(db: DatabaseManager, *, type: str, title: str, body: str = "",
         created.append(repo.insert_notification(
             db, recipient_role_id=None, recipient_employee_id=recipient_employee_id,
             type=type, title=title, body=body, priority=priority,
-            entity_type=entity_type, entity_id=entity_id, conn=conn))
+            entity_type=entity_type, entity_id=entity_id,
+            data_json=data_json, conn=conn))
     for rid in role_ids:
         created.append(repo.insert_notification(
             db, recipient_role_id=rid, recipient_employee_id=None,
             type=type, title=title, body=body, priority=priority,
-            entity_type=entity_type, entity_id=entity_id, conn=conn))
+            entity_type=entity_type, entity_id=entity_id,
+            data_json=data_json, conn=conn))
     return created
 
 

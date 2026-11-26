@@ -397,6 +397,52 @@ def update_booking_schedule(db: DatabaseManager, booking_id: int, *,
         db.execute(sql, params)
 
 
+def update_booking_amounts(db: DatabaseManager, booking_id: int, *,
+                           total_amount: int, deposit_required: int,
+                           conn=None) -> None:
+    """Apply a re-priced total without touching hall/time (FR-026
+    service changes). The old values live in booking_service_changes."""
+    sql = """UPDATE bookings
+             SET total_amount = ?, deposit_required = ?
+             WHERE id = ?"""
+    params = (total_amount, deposit_required, booking_id)
+    if conn is not None:
+        conn.execute(sql, params)
+    else:
+        db.execute(sql, params)
+
+
+def insert_booking_service_change(db: DatabaseManager, *, booking_id: int,
+                                  employee_id: int | None,
+                                  old_services_json: str, new_services_json: str,
+                                  old_total: int, new_total: int, delta: int,
+                                  due_at: str | None, refund_id: int | None,
+                                  contract_action: str, reason: str,
+                                  conn=None) -> int:
+    """Record one post-confirmation service change (FR-026 / BR-13)."""
+    sql = """INSERT INTO booking_service_changes
+             (booking_id, employee_id, old_services_json, new_services_json,
+              old_total, new_total, delta, due_at, refund_id,
+              contract_action, reason)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"""
+    params = (booking_id, employee_id, old_services_json, new_services_json,
+              old_total, new_total, delta, due_at, refund_id,
+              contract_action, reason)
+    if conn is not None:
+        return int(conn.execute(sql, params).lastrowid)
+    return db.execute(sql, params)
+
+
+def list_booking_service_changes(db: DatabaseManager,
+                                 booking_id: int) -> list[dict]:
+    rows = db.query_all(
+        """SELECT * FROM booking_service_changes
+           WHERE booking_id = ? ORDER BY created_at, id""",
+        (booking_id,),
+    )
+    return [dict(r) for r in rows]
+
+
 def update_booking_customer(db: DatabaseManager, booking_id: int,
                             customer_id: int, conn=None) -> None:
     """Apply an ownership transfer (SRS §8.12). Payment rows keep

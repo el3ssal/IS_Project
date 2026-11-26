@@ -7,9 +7,18 @@ Uses a temporary database; never touches real data.
 """
 from __future__ import annotations
 
+import os
 import sys
 import tempfile
 from pathlib import Path
+
+# Phase 8 (FR-014): seeding encrypts National IDs, so the encryption
+# key must exist before seed() runs. Standalone script: use the same
+# fixed test-only key as tests/conftest.py (protects no real data).
+os.environ.setdefault(
+    "WEDDING_HALL_ENCRYPTION_KEY",
+    "CVkSWgd56VHohFFpNwfpwu7gqD-zqYbM887v9XMtyO8=",
+)
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 

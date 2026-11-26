@@ -107,6 +107,14 @@ def _validate_template_body(body: str) -> None:
             f"Allowed: {', '.join(CONTRACT_PLACEHOLDERS)}.")
 
 
+def _body_for_lang(template: dict, lang: str) -> str:
+    """English body by default; the Arabic body when the language is
+    Arabic and the template has one (Phase 8, NFR-005)."""
+    if lang == "ar" and str(template.get("body_ar") or "").strip():
+        return template["body_ar"]
+    return template["body"]
+
+
 def _render_template(body: str, context: dict) -> str:
     def replace(match: re.Match) -> str:
         return str(context.get(match.group(1), ""))
@@ -132,7 +140,8 @@ class ContractService:
             try:
                 data = json.loads(row["value"])
                 templates.append({"name": data.get("name", ""),
-                                  "key": row["key"], "body": data.get("body", "")})
+                                  "key": row["key"], "body": data.get("body", ""),
+                                  "body_ar": data.get("body_ar", "")})
             except ValueError:
                 logger.warning("Ignoring unparsable contract template %s.", row["key"])
         return templates
@@ -145,15 +154,24 @@ class ContractService:
             raise NotFoundError(f"Contract template {name!r} does not exist.")
         return json.loads(raw)
 
-    def create_template(self, employee, *, name: str, body: str) -> dict:
+    def create_template(self, employee, *, name: str, body: str,
+                        body_ar: str | None = None) -> dict:
+        """Create a template. ``body_ar`` is the optional Arabic body
+        (Phase 8, NFR-005): when present and the generating employee's
+        language is Arabic, contracts render from it; otherwise the
+        English body is used. Validated with the same placeholder
+        rules as the English body."""
         require_permission(self.db, employee, "contract.manage")
         if not str(name or "").strip():
             raise ValidationError("Template name must not be empty.")
         _validate_template_body(body)
+        if body_ar:
+            _validate_template_body(body_ar)
         key = TEMPLATE_PREFIX + _slug(name)
         if system_repository.get_setting(self.db, key, ""):
             raise ValidationError(f"A contract template named {name!r} already exists.")
-        data = {"name": name.strip(), "body": body}
+        data = {"name": name.strip(), "body": body,
+                "body_ar": body_ar or ""}
         system_repository.set_setting(self.db, key, json.dumps(data, ensure_ascii=False))
         audit_service.record(
             self.db, employee_id=employee.id, action="contract.template_create",
@@ -162,13 +180,23 @@ class ContractService:
             description=f"Contract template {name!r} created.")
         return data
 
-    def update_template(self, employee, *, name: str, body: str) -> dict:
+    def update_template(self, employee, *, name: str, body: str,
+                        body_ar: str | None = None) -> dict:
         require_permission(self.db, employee, "contract.manage")
         _validate_template_body(body)
+        if body_ar:
+            _validate_template_body(body_ar)
         key = TEMPLATE_PREFIX + _slug(name)
-        if not system_repository.get_setting(self.db, key, ""):
+        raw = system_repository.get_setting(self.db, key, "")
+        if not raw:
             raise NotFoundError(f"Contract template {name!r} does not exist.")
-        data = {"name": name.strip(), "body": body}
+        try:
+            old_data = json.loads(raw)
+        except ValueError:
+            old_data = {}
+        data = {"name": name.strip(), "body": body,
+                "body_ar": body_ar if body_ar is not None
+                           else old_data.get("body_ar", "")}
         system_repository.set_setting(self.db, key, json.dumps(data, ensure_ascii=False))
         audit_service.record(
             self.db, employee_id=employee.id, action="contract.template_update",
@@ -260,9 +288,11 @@ class ContractService:
         return path
 
     def generate_contract(self, employee, booking_id: int,
-                          template_name: str) -> Contract:
+                          template_name: str, lang: str = "en") -> Contract:
         """Generate the first contract version for a Confirmed booking.
-        One contract per booking — later edits create new versions."""
+        One contract per booking — later edits create new versions.
+        ``lang="ar"`` renders from the template's Arabic body when the
+        template has one (Phase 8, NFR-005); otherwise English."""
         require_permission(self.db, employee, "contract.manage")
         booking = booking_repository.get_booking(self.db, booking_id)
         if booking is None:
@@ -280,7 +310,8 @@ class ContractService:
         with self.db.transaction() as conn:
             number = self._next_number(conn)
             context["contract_number"] = number
-            body = _render_template(template["body"], context)
+            body = _render_template(
+                _body_for_lang(template, lang), context)
             contract_id = repo.insert_contract(
                 self.db, number=number, booking_id=booking_id,
                 template_name=template["name"], conn=conn)
@@ -299,6 +330,10 @@ class ContractService:
                    title=f"Contract {number} awaits signature",
                    body=f"Contract {number} for booking {booking['number']} "
                         "was generated and awaits signature.",
+                   title_key="notif.contract_awaiting_signature.title",
+                   body_key="notif.contract_awaiting_signature.body",
+                   data={"number": number,
+                         "booking_number": booking["number"]},
                    entity_type="contract", entity_id=contract_id, conn=conn)
         self._write_contract_file(number, 1, body)
         row = repo.get_contract(self.db, contract_id)
@@ -306,7 +341,8 @@ class ContractService:
 
     def create_new_version(self, employee, contract_id: int, *,
                            template_name: str | None = None,
-                           body: str | None = None) -> ContractVersion:
+                           body: str | None = None,
+                           lang: str = "en") -> ContractVersion:
         """Create a new frozen version. Without ``body`` the version is
         re-rendered from the template with the booking's current data;
         with ``body`` the caller supplies the edited document (editing a
@@ -328,7 +364,7 @@ class ContractService:
                 employee, template_name or contract["template_name"])
             context = self._context(booking)
             context["contract_number"] = contract["number"]
-            body = _render_template(template["body"], context)
+            body = _render_template(_body_for_lang(template, lang), context)
             used_template = template["name"]
         else:
             if not str(body or "").strip():

@@ -13,13 +13,18 @@ from ..database import DatabaseManager
 def insert_notification(db: DatabaseManager, *, recipient_role_id: int | None,
                         recipient_employee_id: int | None, type: str, title: str,
                         body: str, priority: str, entity_type: str,
-                        entity_id: int | None, conn=None) -> int:
+                        entity_id: int | None, data_json: str | None = None,
+                        conn=None) -> int:
     sql = """INSERT INTO notifications
              (recipient_role_id, recipient_employee_id, type, title, body,
-              priority, entity_type, entity_id)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)"""
+              priority, entity_type, entity_id, data_json)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"""
+    # data_json is NOT NULL (migration 005): rows without i18n keys
+    # store '{}' ("no i18n data"), never NULL — an explicit NULL
+    # would override the column DEFAULT and violate the constraint.
     params = (recipient_role_id, recipient_employee_id, type, title, body,
-              priority, entity_type, entity_id)
+              priority, entity_type, entity_id,
+              data_json if data_json is not None else "{}")
     if conn is not None:
         return int(conn.execute(sql, params).lastrowid)
     return db.execute(sql, params)
@@ -58,11 +63,20 @@ def exists_notification(db: DatabaseManager, *, type: str, entity_type: str,
     since ``since_iso``? Used to de-duplicate lazy time-based warnings
     (hold-expiring, event-approaching) that fire from read sweeps
     (SRS §10, GAP G-11). ``created_at`` is SQLite CURRENT_TIMESTAMP
-    (UTC); the window is 24h, so the 2h UTC/local skew (A-37) is
-    harmless here."""
+    (UTC, ``YYYY-MM-DD HH:MM:SS`` with a space separator), so callers
+    must pass ``since_iso`` in UTC in the same format for an exact
+    24h window (A-81). The comparison additionally normalizes both
+    sides with SQLite ``datetime()``: a ``T``-separated ISO value
+    (``datetime.now().isoformat()``) used to compare as a *smaller*
+    string than any space-separated timestamp on the same date
+    (``' '`` < ``'T'``), so the dedup silently failed whenever the
+    UTC date of ``created_at`` equalled the date of ``since_iso`` —
+    every night 00:00–02:00 Africa/Cairo — and a duplicate warning
+    was created. That format mismatch, not the 2h UTC/local skew,
+    was the real cause of the duplicate notifications."""
     sql = """SELECT 1 FROM notifications
              WHERE type = ? AND entity_type = ? AND entity_id = ?
-               AND created_at >= ? LIMIT 1"""
+               AND datetime(created_at) >= datetime(?) LIMIT 1"""
     params = (type, entity_type, entity_id, since_iso)
     if conn is not None:
         row = conn.execute(sql, params).fetchone()

@@ -7,8 +7,8 @@ Artificial Intelligence, Benha University)
 **Source SRS:** `Wedding_Hall_Management_System_SRS_and_AI_Agent_Brief.md`
 (SRS v1.0, 2026-11-26). **Instructor deck:**
 `Final_Project_Ideas_Full.pptx` (135 slides, created 2026-11-19).
-**Status:** implemented and verified — 317 unittest + 3 console tests,
-all passing; schema v4; 54 tables; 41 permissions; 5 roles.
+**Status:** implemented and verified — 351 unittest + 3 console tests,
+all passing; schema v5; 56 tables; 42 permissions; 5 roles.
 
 This document describes the system **as built**, section by section
 against the source SRS. Where the as-built system differs from the
@@ -55,17 +55,17 @@ signature service; two-factor authentication; AI/ML claims or
 external AI services; equipment as independently scheduled resources;
 waiting list (§9.4).
 
-**[AS-BUILT — deferred, not built]:** FR-026 post-confirmation
-service changes and FR-029 smart scheduling advisory are deferred
-pending a scope decision (A-35, Phase 7 final status). They are
-recorded as Deferred in the traceability matrix, not silently
-dropped.
+**[AS-BUILT — built in Phase 8 (2026-11-26/27, supersedes the Phase 7
+deferral, A-79)]:** FR-026 post-confirmation service changes and
+FR-029 smart scheduling advisory are implemented and verified
+(`tests/test_phase8.py`); see §3.6/§3.8 below and the traceability
+matrix Phase 8 section.
 
 ## 2. Users, roles, authentication
 
 - **Roles (seeded, 5):** Owner, Manager, Receptionist, Accountant,
   Staff — with the responsibilities of source SRS §2.1.
-- **Permissions as data (41 codes):** stored in `roles` /
+- **Permissions as data (42 codes):** stored in `roles` /
   `permissions` / `role_permissions`; the Owner can configure each
   role's permissions; permission changes take effect without a code
   change (tested). Authorization is checked in every service
@@ -78,17 +78,31 @@ dropped.
   after 5 failed logins for 15 minutes; failed attempts and security
   events audited. Sessions: secure random tokens, only the SHA-256
   hash stored server-side, 8-hour expiry, logout.
-- **No "Remember Me"** (A-09): it cannot be done safely with this
-  Gradio deployment mode, so it is omitted and documented.
+- **"Remember Me" (FR-011, built in Phase 8, A-72):** optional
+  checkbox on login. Server-side persistent tokens: random opaque
+  token, only its SHA-256 hash stored, 30-day expiry, at most 3 live
+  tokens per employee, rotation on use, revocation on logout and on
+  any password change/reset or account deactivation, audited.
+  Client handoff via Gradio `gr.BrowserState` (browser localStorage);
+  the password is never stored on the client. Optional stable
+  secret `WEDDING_HALL_BROWSER_SECRET` (without it a server restart
+  simply asks the user to log in again). Sessions without Remember
+  Me still last up to 8 h.
 - **Privacy:** National ID and sensitive data only for authorized
   roles; masked (`****` + last 4) unless the caller holds
   `customer.view_sensitive`; never in duplicate warnings, audit JSON
   or logs. Passwords, session tokens and full identity values are
   never logged (redacting log filter).
-- **[AS-BUILT] No field-level encryption** (A-08): no vetted crypto
-  dependency is in the approved stack and key management is
-  unanswered; protection is RBAC + masking + redacted logging.
-  Documented as a limitation, not claimed.
+- **[AS-BUILT] Field-level encryption (FR-014, built in Phase 8,
+  A-68):** the National ID is encrypted at rest with `cryptography`
+  Fernet; the key comes from the env var
+  `WEDDING_HALL_ENCRYPTION_KEY` (never committed, never stored in
+  the DB; `scripts/generate_encryption_key.py` generates it); a
+  missing/invalid key fails loudly and never silently stores
+  plaintext; migration 005 encrypts existing values in place with
+  decrypt-after-encrypt validation. Phone/email are not encrypted
+  (SRS §2.4 names the National ID); they stay protected by RBAC +
+  masking + redacted logging.
 
 ## 3. Core domain
 
@@ -134,8 +148,15 @@ dropped.
   `booking_policy_snapshots` and `financial_policy_snapshots`, A-05)
   are saved at confirmation; later config changes never alter a
   confirmed booking (BR-11).
-- **[AS-BUILT] FR-029 scheduling advisory: NOT built** (deferred,
-  A-35). The availability service is the hook for it.
+- **[AS-BUILT] FR-029 scheduling advisory: BUILT in Phase 8
+  (A-73).** `AvailabilityService.suggest_alternatives` returns the
+  nearest feasible alternatives with a plain-language reason each
+  (same hall same day nearest time first, then later days, then other
+  halls, then shorter durations never below the package minimum;
+  30-minute steps, 7 days ahead, max 5; deterministic order; every
+  candidate verified against hours/bookings/holds/buffer/maintenance/
+  closures/capacity). Advisory only — it never changes a booking.
+  Exposed in the booking flow UI.
 
 ## 4. Halls, hours, event types, maintenance
 
@@ -488,7 +509,7 @@ high-availability claims.
   schema/migrations (v1→v4), reusable validation and authorization,
   unit tests for rules + integration tests for DB workflows.
 - **Testing:** Python stdlib `unittest`; temporary test database;
-  deterministic fixtures; tests per phase; 317 tests + 3 console
+  deterministic fixtures; tests per phase; 351 tests + 3 console
   tests, all passing (see §21).
 
 ## 17. Architecture (as built)
@@ -530,7 +551,7 @@ dataclasses with validation in `__post_init__`. Custom exceptions:
 
 ## 18. Database design (as built)
 
-- **54 tables** (53 domain + `schema_version`), schema **v4**.
+- **56 tables** (55 domain + `schema_version`), schema **v5**.
   Migrations: 001 initial, 002 (`contracts.signature_date`,
   `employees.specialties`), 003 (`reschedule_history.due_at`,
   `no_show_records.fee_amount`/`refundable_amount`), 004
@@ -568,9 +589,13 @@ dataclasses with validation in `__post_init__`. Custom exceptions:
 - **UC-03 Confirm booking** — accept quotation → convert to Pending
   booking (hold starts) → record the 30% deposit → Confirmed
   automatically.
-- **UC-04 Modify confirmed booking** — **[AS-BUILT] deferred
-  (FR-026).** Reschedule/transfer/cancel/no-show are built (§8);
-  post-confirmation service changes are not.
+- **UC-04 Modify confirmed booking** — **[AS-BUILT] built in
+  Phase 8 (FR-026, A-69/A-70).** Reschedule/transfer/cancel/no-show
+  are built (§8); post-confirmation service changes are built too:
+  Confirmed bookings only, re-price with the original discount
+  carried forward, increase becomes outstanding with a due date,
+  decrease creates a pending refund (never auto-paid), new contract
+  version only when the total changes.
 - **UC-05 Reschedule** — Manager/Owner, one transaction, re-check +
   re-price, delta recorded, tasks shift.
 - **UC-06 Cancel booking** — Manager/Owner; tiered fee from the
@@ -598,8 +623,8 @@ availability re-checked on quotation conversion; BR-10 deposit
 verification confirms a Pending booking automatically; BR-11
 historical confirmed price/policy snapshots immutable; BR-12
 included services never double-charged; BR-13 — **[AS-BUILT]
-deferred with FR-026** (service-change price recalculation is not
-built); BR-14 payments immutable, corrections via reversal/void;
+enforced since Phase 8** (service-change price recalculation +
+delta record, A-69/A-70); BR-14 payments immutable, corrections via reversal/void;
 BR-15 refund total ≤ refundable amount; BR-16 cancellation releases
 the hall on approval, not on refund payment; BR-17 Cancelled/Expired
 cannot be reopened; BR-18 staff conflict warns, does not block;
@@ -608,8 +633,8 @@ in business logic; BR-21 attachments need authorization on every
 access; BR-22 audit records for critical operations; BR-23
 deactivation never destroys historical records; BR-24 venue expense
 never double-counted as event expense; BR-25 no customer-rejection
-workflow for quotations. (BR-13 is the only rule not enforced,
-because its feature FR-026 is deferred — see §25.)
+workflow for quotations. (All 25 business rules are enforced since
+Phase 8.)
 
 ## 21. Testing and acceptance
 
@@ -628,10 +653,10 @@ because its feature FR-026 is deferred — see §25.)
   duplicate customer; T-22 backup restores and integrity verifies.
   All 22 are implemented and verified in the unittest suite.
 - **Full suite (final):** `python -m unittest discover -s tests` →
-  **317 tests, all pass** (Phase 1: 34; Phase 2: +44; Phase 3: +66;
+  **351 tests, all pass** (Phase 1: 34; Phase 2: +44; Phase 3: +66;
   Phase 4: +35 incl. the migration-002 test; Phase 5: +51 incl. the
   migration-003 test; Phase 6: +47 incl. the migration-004 test;
-  Phase 7: +40). Console 3/3. Every test uses a temporary database.
+  Phase 7: +40; Phase 8: +34 incl. the migration-005 test). Console 3/3. Every test uses a temporary database.
 
 ## 22. Error handling and logging
 
@@ -684,15 +709,15 @@ approval.
 5. **Cancellation/no-show fee numbers** (A-43/A-44): seed defaults
    (10%/25%/50% tiers; deposit forfeited on no-show). The Owner must
    confirm them with the hall.
-6. **FR-026 post-confirmation service changes:** deferred pending a
-   scope decision (BR-13 with it).
-7. **FR-029 scheduling advisory:** deferred (A-35).
+6. **FR-026 post-confirmation service changes:** built in Phase 8
+   (A-69/A-70; BR-13 enforced with it).
+7. **FR-029 scheduling advisory:** built in Phase 8 (A-73).
 
 ## 26. Definition of done (final)
 
-- [x] All 7 phases delivered and verified by tests (317 unittest +
-  3 console, all passing).
-- [x] Deck requirements: 3-tier, 54 tables, 3+ classes + custom
+- [x] All 7 phases + Phase 8 delivered and verified by tests
+  (351 unittest + 3 console, all passing).
+- [x] Deck requirements: 3-tier, 56 tables, 3+ classes + custom
   exceptions, CRUD + search, 2+ business rules in the logic tier,
   try/except + Info/Error, 1 CSV report (8 reports, all CSV),
   3 console tests, delivery = code + README + 4 diagrams +

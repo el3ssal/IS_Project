@@ -709,6 +709,7 @@ TASK_PRIORITIES = ("low", "medium", "high", "urgent")
 NOTIFICATION_PRIORITIES = ("low", "normal", "high", "urgent")
 NOTIFICATION_TYPES = (
     "new_booking", "hold_expiring", "booking_cancelled", "booking_rescheduled",
+    "booking_services_changed",
     "payment_received", "installment_due", "event_approaching",
     "task_due_soon", "task_overdue", "task_assigned", "assignment_conflict",
     "contract_awaiting_signature", "hall_maintenance",

@@ -34,6 +34,8 @@ class AppSettings:
     session_expiry_hours: int = 8
     max_failed_logins: int = 5
     lockout_minutes: int = 15
+    # Remember Me (Phase 8, FR-011): persistent tokens last this long.
+    remember_me_days: int = 30
     # Booking policy defaults (seeded into system_settings; Phase 2/3 use them)
     hold_hours: int = 48
     grace_hours: int = 24
