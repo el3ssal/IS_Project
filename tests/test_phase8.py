@@ -614,4 +614,4 @@ class TestI18nPhase8(Phase8TestCase):
                               for c in load_fns[0].inputs])
         self.assertIn(bs_id, [getattr(c, "_id", c)
                               for c in load_fns[0].outputs])
-        self.assertEqual(len(load_fns[0].outputs), 10)
+        self.assertEqual(len(load_fns[0].outputs), 11)

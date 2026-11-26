@@ -31,6 +31,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from wedding_hall_system.config.settings import AppSettings  # noqa: E402
 from wedding_hall_system.ui.app import build_app  # noqa: E402
+from wedding_hall_system.ui.theme import launch_kwargs  # noqa: E402
 from wedding_hall_system.utils.exceptions import ConfigurationError  # noqa: E402
 from wedding_hall_system.utils.logging_config import setup_logging  # noqa: E402
 
@@ -75,7 +76,8 @@ def main(argv: list[str] | None = None) -> None:
         print("Set WEDDING_HALL_ENCRYPTION_KEY first — generate one with:")
         print("  python scripts/generate_encryption_key.py")
         raise SystemExit(2)
-    app.launch(server_name=host, server_port=port, show_error=True)
+    app.launch(server_name=host, server_port=port, show_error=True,
+               **launch_kwargs())
 
 
 if __name__ == "__main__":

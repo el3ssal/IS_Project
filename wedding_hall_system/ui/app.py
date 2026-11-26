@@ -23,6 +23,15 @@ the stored value survive server restarts; without it Gradio generates
 a fresh secret per process and a restart simply asks the user to log
 in again. The token's security does not depend on that secret — it is
 validated server-side.
+
+Post-Phase 8 polish adds the venue theme and live RTL
+(``ui/theme.py``): a hidden ``gr.HTML`` direction signal whose value
+is ``<span data-lang="ar|en">`` — every handler that can change the
+language (login, restore, toggle, logout) updates it — and the
+launch JavaScript reads it through the ``<gradio-app>`` shadow DOM
+and flips ``<html dir>`` live. Theme/css/js are Gradio 6 launch
+arguments (``__main__`` passes ``theme.launch_kwargs()``); they must
+not be passed to ``gr.Blocks(...)``.
 """
 from __future__ import annotations
 
@@ -43,6 +52,7 @@ from ..ui.dashboard_views import build_dashboard_ui
 from ..ui.files_views import build_files_ui
 from ..ui.finance_views import build_finance_ui
 from ..ui.i18n import t
+from ..ui.theme import dir_signal_html
 from ..ui.operations_views import build_operations_ui
 from ..ui.reports_views import build_reports_ui
 from ..ui.search_views import build_search_ui
@@ -74,6 +84,14 @@ def build_app(settings: AppSettings | None = None,
         remember_state = gr.BrowserState(
             None, storage_key="whms-remember-me",
             secret=os.environ.get("WEDDING_HALL_BROWSER_SECRET") or None)
+        # RTL direction signal (ui/theme.py): a hidden HTML component
+        # whose value is `<span data-lang="ar|en">`. RTL_JS reads it
+        # through the <gradio-app> shadow DOM and flips the whole page
+        # direction live; every handler that can change the language
+        # updates this component. Hidden via CSS, not visible=False,
+        # so the element is always in the DOM for the observer.
+        dir_signal = gr.HTML(dir_signal_html("ar"),
+                             elem_id="whms-dir-signal")
 
         # -- login view -------------------------------------------------
         # Built in the venue default language (Arabic); the toggle in
@@ -217,6 +235,7 @@ def build_app(settings: AppSettings | None = None,
                 gr.update(visible=False), gr.update(visible=True),
                 _welcome_md(lang, employee), _status_text(lang), "", lang,
                 gr.update(value=lang), remember_token,
+                dir_signal_html(lang),
             )
 
         def do_login(name: str, pw: str, remember: bool):
@@ -243,13 +262,15 @@ def build_app(settings: AppSettings | None = None,
             if not stored_token:
                 return (None, None, gr.update(visible=True),
                         gr.update(visible=False), "", "", "", "ar",
-                        gr.update(value="ar"), None)
+                        gr.update(value="ar"), None,
+                        dir_signal_html("ar"))
             employee, new_token = auth.validate_remember_token(stored_token)
             if employee is None:
                 return (None, None, gr.update(visible=True),
                         gr.update(visible=False), "",
                         t("ar", "login.session_expired"), "", "ar",
-                        gr.update(value="ar"), None)
+                        gr.update(value="ar"), None,
+                        dir_signal_html("ar"))
             lang = get_language(db, employee)
             session = auth.create_session(employee)
             gr.Info(t(lang, "login.session_restored"))
@@ -287,6 +308,8 @@ def build_app(settings: AppSettings | None = None,
                     outputs.extend(values)
                 else:
                     outputs.append(values)
+            # Live RTL: flip the page direction with the language.
+            outputs.append(gr.update(value=dir_signal_html(lang)))
             gr.Info(t(lang, "login.msg_language").format(
                 name="العربية" if lang == "ar" else "English"))
             return outputs
@@ -304,7 +327,7 @@ def build_app(settings: AppSettings | None = None,
             return (
                 None, None,
                 gr.update(visible=True), gr.update(visible=False),
-                "", "", "", None,
+                "", "", "", None, dir_signal_html("ar"),
             )
 
         def do_refresh(token):
@@ -329,7 +352,7 @@ def build_app(settings: AppSettings | None = None,
         # -- events -----------------------------------------------------
         login_outputs = [session_token, current_user, login_view, main_view,
                          welcome, status_box, login_msg, lang_state,
-                         lang_radio, remember_state]
+                         lang_radio, remember_state, dir_signal]
         login_btn.click(
             do_login, inputs=[username, password, remember_cb],
             outputs=login_outputs,
@@ -345,7 +368,8 @@ def build_app(settings: AppSettings | None = None,
         logout_btn.click(
             do_logout, inputs=[session_token, remember_state],
             outputs=[session_token, current_user, login_view, main_view,
-                     welcome, status_box, login_msg, remember_state],
+                     welcome, status_box, login_msg, remember_state,
+                     dir_signal],
         )
         # Language toggle: outputs are the language state, the welcome
         # and status lines, one merged update per toggle component,
@@ -354,6 +378,7 @@ def build_app(settings: AppSettings | None = None,
         lang_outputs.extend(toggle_components)
         for _, fn_outputs in render_fns:
             lang_outputs.extend(fn_outputs)
+        lang_outputs.append(dir_signal)
         lang_radio.change(do_language, inputs=[lang_radio, session_token],
                           outputs=lang_outputs)
         refresh_btn.click(do_refresh, inputs=[session_token], outputs=[status_box])

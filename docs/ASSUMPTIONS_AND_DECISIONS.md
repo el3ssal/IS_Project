@@ -842,3 +842,69 @@ break the comparison again. Verified: the 3 tests fail with
 `TZ=Africa/Cairo` and the default (UTC) timezone; full suite green under
 both. The A-50/A-56 "~22h window" statements are superseded for the dedup
 window (now exactly 24h); the lazy-sweep behaviour itself is unchanged.
+
+### A-82 — Whole-page RTL: hidden direction signal + MutationObserver (2026-11-27)
+
+Phase 6/8 made every string bilingual, but the page itself stayed
+LTR: Gradio has no `rtl` flag, and the only direction in place was
+`dir_wrap` around dynamic Markdown. The fix (in `ui/theme.py`,
+wired in `ui/app.py`, applied in `__main__.py`): a hidden `gr.HTML`
+component (`elem_id="whms-dir-signal"`, value
+`<span data-lang="ar|en" data-dir="rtl|ltr">`) that every handler
+which can change the language updates — login, remember-me restore,
+the language toggle, logout (login outputs grew 10 → 11, and the
+Phase 8 test asserting 10 was updated). The launch JavaScript
+(`RTL_JS`) reads the signal and sets `document.documentElement.dir`
+(and `lang`); a `MutationObserver` on the signal flips the direction
+live on every toggle. Two Gradio-6 facts forced this shape:
+(1) the app renders inside the `<gradio-app>` shadow DOM, so plain
+`document.getElementById` cannot see the signal — the script goes
+through `gradio-app.shadowRoot`, with a 300 ms polling fallback
+(20 s cap) if the app is not mounted yet; (2) direction is an
+inherited CSS property, so setting it on `<html>` flips every
+Gradio component (flex layouts reverse automatically) — no
+per-component RTL CSS is needed, and `[dir="rtl"]` selectors in the
+custom CSS would NOT work because the CSS is injected inside the
+shadow tree and cannot see the `<html>` attribute. The signal is
+hidden with CSS (`#whms-dir-signal { display: none }`), not
+`visible=False`, so the element is always in the DOM for the
+observer. Verified live: served `/config` carries the JS (contains
+`MutationObserver`) and the CSS; `gradio_client` login returns
+`data-lang="ar"`, toggling to English returns `data-lang="en"` and
+back to Arabic returns `data-lang="ar"` (`tests/test_ui_rtl_theme.py`).
+
+### A-83 — Venue theme: Soft base, warm whites, petroleum/indigo/yellow (2026-11-27)
+
+Gradio 6 moved `theme`/`css`/`js`/`head` from `gr.Blocks(...)` to
+`launch()` — passing them to `Blocks` is a TypeError in 6.32, so
+`ui/theme.py::launch_kwargs()` supplies them and `__main__.main`
+passes `**launch_kwargs()` to `app.launch()`. Theme: `Soft` base,
+`primary_hue="teal"` (petroleum), `secondary_hue="indigo"`,
+`neutral_hue="stone"`, `text_size`/`spacing_size`/`radius_size`
+`"lg"`, with `.set()` overrides — body `#FAF8F2` (warm
+eye-comfortable white, never pure white; `#FFFFFF` is used nowhere
+as a surface), blocks `#FFFDF8`, primary buttons petroleum `#0F766E`
+(hover `#0D9488`), links/checkboxes petroleum, focus ring amber
+`#D97706`, dark-mode twins (`#1C1917` body). Custom CSS (injected
+into the shadow DOM, so it targets `.gradio-container`, not `body`):
+a subtle dotted paper background
+(`radial-gradient(rgba(15,118,110,0.10) 1px, transparent 1.3px)`,
+26 px grid), a 4 px yellow top rule (`#EAB308`), the direction
+signal hidden, the Gradio footer hidden. `background_fill_primary`
+is `"transparent"` so the dots show over the body background (the
+endorsed pattern from the gradio-themes skill). No new dependency;
+Gradio's built-in theming + custom CSS only.
+
+### A-84 — Fonts: system stack with Arabic coverage, no webfont download (2026-11-27)
+
+The theme font is a system stack (`Segoe UI`, `Noto Kufi Arabic`,
+`Tahoma`, `Arial`, `sans-serif`; mono `Cascadia Code`, `Consolas`,
+`Courier New`, `monospace`) rather than a Google Font. A webfont
+would need a runtime download on every load, which the venue LAN
+deployment (offline by design, A-36) cannot depend on, and would
+fail silently to a fallback anyway. The stack still reads as
+distinctive rather than plain: `Noto Kufi Arabic`/`Cairo` render
+Arabic in a Kufi style where installed, `Segoe UI`/`Tahoma` cover
+the rest. If a nicer display font is wanted later, bundle a
+`.woff2` locally and reference it via `head`/`css_paths` instead of
+a CDN.
