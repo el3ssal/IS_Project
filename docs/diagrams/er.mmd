@@ -1,0 +1,312 @@
+%% ER diagram — APPENDIX (AS-BUILT, schema v4)
+%% Real table and column names from wedding_hall_system/data/schema.sql.
+%% The full schema has 54 tables. This diagram draws the CORE 26 entities and
+%% every relationship shown is a real FOREIGN KEY in schema.sql. The remaining
+%% 28 tables are listed in the note below and live in schema.sql:
+%%   roles, permissions, role_permissions, employee_roles, login_attempts,
+%%   sessions, customer_contacts, hall_weekly_hours, hall_special_hours,
+%%   package_halls, package_event_types, package_services, service_halls,
+%%   booking_services, booking_history, reschedule_history, booking_transfers,
+%%   payment_corrections, financial_policy_snapshots, cancellation_records,
+%%   no_show_records, notifications, audit_logs, system_settings,
+%%   backup_records, schema_version, task_history, employee_availability.
+%% Conventions: money is integer piasters; datetimes are ISO-8601 text
+%% (Africa/Cairo); every table has surrogate integer PK id, except pure link
+%% tables, which use composite keys. facilities live as halls.facilities_json
+%% (no hall_facilities table, AR-08); notes history lives in audit_logs (AR-09).
+%% contracts.current_version_id is a plain INTEGER pointer to contract_versions
+%% (no FK constraint declared in schema.sql), so it is shown as a column only,
+%% not as a relationship line.
+
+erDiagram
+    EMPLOYEES {
+        int id PK
+        string username "UNIQUE"
+        string password_hash
+        string password_salt
+        string full_name
+        string phone
+        string email
+        string specialties
+        int is_active
+        int failed_attempts
+        string locked_until
+        string language
+    }
+    ROLES {
+        int id PK
+        string name "UNIQUE"
+        string description
+    }
+    EMPLOYEE_ROLES {
+        int employee_id PK,FK
+        int role_id PK,FK
+    }
+    CUSTOMERS {
+        int id PK
+        string full_name
+        string phone
+        string phone_normalized
+        string email
+        string email_normalized
+        string address
+        string national_id
+        string notes
+    }
+    CUSTOMER_INTERACTIONS {
+        int id PK
+        int customer_id FK
+        int employee_id FK
+        string type
+        string summary
+        string created_at
+    }
+    HALLS {
+        int id PK
+        string name
+        string description
+        int capacity
+        int base_price
+        string status
+        string facilities_json
+        string notes
+        int is_active
+    }
+    MAINTENANCE_BLOCKS {
+        int id PK
+        int hall_id FK
+        string type
+        string description
+        string start_at
+        string end_at
+        int recorded_by FK
+    }
+    EVENT_TYPES {
+        int id PK
+        string name
+        int default_duration_min
+        int is_active
+    }
+    PACKAGES {
+        int id PK
+        string name
+        string description
+        int base_price
+        int default_duration_min
+        int min_duration_min
+        int included_guests
+        int extra_guest_price
+        int is_active
+    }
+    SERVICES {
+        int id PK
+        string name
+        string description
+        string pricing_method
+        int unit_price
+        int is_active
+    }
+    PRICING_RULES {
+        int id PK
+        string name
+        int hall_id FK
+        int package_id FK
+        int event_type_id FK
+        int weekday
+        string season
+        string adjustment_type
+        int adjustment_value
+        int is_active
+    }
+    DISCOUNT_RECORDS {
+        int id PK
+        int booking_id FK
+        int employee_id FK
+        int amount
+        int percent
+        string reason
+        string created_at
+    }
+    QUOTATIONS {
+        int id PK
+        string number "UNIQUE"
+        int customer_id FK
+        int hall_id FK
+        int event_type_id FK
+        int package_id FK
+        string start_at
+        string end_at
+        int guest_count
+        int total_amount
+        string status
+        string valid_until
+        int created_by FK
+    }
+    QUOTATION_ITEMS {
+        int id PK
+        int quotation_id FK
+        string kind
+        string label
+        int amount
+    }
+    BOOKINGS {
+        int id PK
+        string number "UNIQUE"
+        int customer_id FK
+        int hall_id FK
+        int quotation_id FK
+        int event_type_id FK
+        int package_id FK
+        string start_at
+        string end_at
+        int guest_count
+        string status
+        int total_amount
+        int deposit_required
+        int deposit_paid
+        string hold_expires_at
+        string grace_expires_at
+        string additional_contact_phone
+        string notes
+        int previous_booking_id FK
+        int created_by FK
+        string created_at
+    }
+    BOOKING_PRICE_ITEMS {
+        int id PK
+        int booking_id FK
+        string kind
+        string label
+        int amount
+    }
+    BOOKING_POLICY_SNAPSHOTS {
+        int id PK
+        int booking_id FK "UNIQUE"
+        string snapshot_json
+        string created_at
+    }
+    CONTRACTS {
+        int id PK
+        string number "UNIQUE"
+        int booking_id FK
+        string template_name
+        int current_version_id
+        string signature_status
+        string signature_date
+    }
+    CONTRACT_VERSIONS {
+        int id PK
+        int contract_id FK
+        int version
+        string body
+        int created_by FK
+        string created_at
+    }
+    ATTACHMENTS {
+        int id PK
+        string entity_type
+        int entity_id
+        string original_filename
+        string storage_filename
+        string mime_type
+        int size_bytes
+        string category
+        int uploaded_by FK
+        int is_deleted
+        string created_at
+    }
+    EVENT_PLANS {
+        int id PK
+        int booking_id FK "UNIQUE"
+    }
+    TASK_TEMPLATES {
+        int id PK
+        string name
+        int event_type_id FK
+        int package_id FK
+        int is_active
+    }
+    TASK_TEMPLATE_ITEMS {
+        int id PK
+        int template_id FK
+        string name
+        string description
+        int default_due_offset_min
+        string priority
+    }
+    TASKS {
+        int id PK
+        int event_plan_id FK
+        int booking_id FK
+        int service_id FK
+        string name
+        string description
+        int assigned_to FK
+        string priority
+        string due_at
+        string status
+        string created_at
+    }
+    PAYMENTS {
+        int id PK
+        string number
+        int booking_id FK
+        int amount
+        string method
+        string reference
+        string status
+        string idempotency_key "UNIQUE, nullable"
+        string initiated_at
+        string confirmed_at
+        int recorded_by FK
+        string created_at
+    }
+    INSTALLMENTS {
+        int id PK
+        int booking_id FK
+        int sequence
+        int amount
+        string due_at
+        string status
+        int paid_payment_id FK
+    }
+
+    EMPLOYEES ||--o{ EMPLOYEE_ROLES : holds
+    ROLES ||--o{ EMPLOYEE_ROLES : granted_to
+    CUSTOMERS ||--o{ CUSTOMER_INTERACTIONS : has
+    EMPLOYEES ||--o{ CUSTOMER_INTERACTIONS : records
+    HALLS ||--o{ MAINTENANCE_BLOCKS : blocked_by
+    EMPLOYEES ||--o{ MAINTENANCE_BLOCKS : records
+    PRICING_RULES }o--o| HALLS : applies_to
+    PRICING_RULES }o--o| PACKAGES : applies_to
+    PRICING_RULES }o--o| EVENT_TYPES : applies_to
+    CUSTOMERS ||--o{ QUOTATIONS : receives
+    HALLS ||--o{ QUOTATIONS : quoted_for
+    EVENT_TYPES |o--o{ QUOTATIONS : types
+    PACKAGES |o--o{ QUOTATIONS : priced_by
+    QUOTATIONS ||--o{ QUOTATION_ITEMS : frozen_price_of
+    CUSTOMERS ||--o{ BOOKINGS : books
+    HALLS ||--o{ BOOKINGS : hosts
+    QUOTATIONS |o--o| BOOKINGS : converts_to
+    EVENT_TYPES |o--o{ BOOKINGS : types
+    PACKAGES |o--o{ BOOKINGS : priced_by
+    BOOKINGS |o--o| BOOKINGS : rebooks_from
+    BOOKINGS ||--o{ BOOKING_PRICE_ITEMS : frozen_price_of
+    BOOKINGS ||--|| BOOKING_POLICY_SNAPSHOTS : frozen_policy_of
+    BOOKINGS ||--o{ DISCOUNT_RECORDS : discounted_by
+    EMPLOYEES ||--o{ DISCOUNT_RECORDS : grants
+    BOOKINGS ||--|| CONTRACTS : has
+    CONTRACTS ||--o{ CONTRACT_VERSIONS : versioned_as
+    BOOKINGS ||--|| EVENT_PLANS : planned_as
+    TASK_TEMPLATES |o--o| EVENT_TYPES : matches
+    TASK_TEMPLATES |o--o| PACKAGES : matches
+    TASK_TEMPLATES ||--o{ TASK_TEMPLATE_ITEMS : lines_of
+    EVENT_PLANS ||--o{ TASKS : checklist_of
+    BOOKINGS ||--o{ TASKS : belongs_to
+    SERVICES |o--o{ TASKS : delivered_by
+    EMPLOYEES |o--o{ TASKS : assigned_to
+    BOOKINGS ||--o{ PAYMENTS : paid_by
+    EMPLOYEES ||--o{ PAYMENTS : records
+    BOOKINGS ||--o{ INSTALLMENTS : split_into
+    PAYMENTS |o--o{ INSTALLMENTS : pays
+    EMPLOYEES ||--o{ ATTACHMENTS : uploads

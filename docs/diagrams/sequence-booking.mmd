@@ -1,0 +1,52 @@
+%% Sequence diagram — Booking creation (AS-BUILT, schema v4)
+%% Swimlanes follow the instructor deck (slides 13, 21, 29): User / UI (Gradio)
+%% / Service / Database. Service layer: BookingService, PricingService,
+%% AvailabilityService, CustomerService (logic tier). Data tier: DatabaseManager
+%% (BEGIN IMMEDIATE transaction) + repositories, SQLite schema v4.
+%% Config: hold 48h, grace 24h, buffer 60 min, deposit 30 percent.
+
+sequenceDiagram
+    autonumber
+    actor U as User<br/>(Receptionist / Manager)
+    participant UI as UI (Gradio)<br/>booking_views.py
+    participant BS as BookingService<br/>booking_service.py
+    participant PS as PricingService<br/>pricing_service.py
+    participant AV as AvailabilityService<br/>availability_service.py
+    participant DB as Database<br/>SQLite (schema v4)<br/>DatabaseManager
+
+    U->>UI: Submit booking form<br/>(customer, hall, event type,<br/>package, start/end, guests, services)
+    UI->>BS: create_booking(employee, customer_id,<br/>hall_id, start_at, end_at, ...)
+    BS->>BS: require_permission("booking.create")<br/>+ validate inputs (ValidationError if bad)
+    BS->>PS: calculate(hall_id, package_id,<br/>event_type_id, guests, services)
+    PS->>DB: SELECT halls, packages, services,<br/>pricing_rules, discount_records
+    DB-->>PS: catalog rows
+    PS-->>BS: PriceBreakdown (itemised lines + total, piasters)
+
+    BS->>DB: BEGIN IMMEDIATE
+    Note over BS,DB: One write transaction (ARCHITECTURE_REVIEW 3.4 rule 1): expire overdue holds, check, re-check, insert, commit, or roll back everything on any failure.
+    BS->>DB: Expire overdue holds<br/>(sweep_expired_holds: pending + hold_expires_at passed)
+    BS->>AV: check_availability(hall_id, start_at, end_at)
+    AV->>DB: SELECT bookings (hall, start, end, status)<br/>+ maintenance_blocks + hall_weekly_hours<br/>+ hall_special_hours + halls.status
+    DB-->>AV: overlapping bookings, blocks, hours
+    AV->>AV: Half-open [start, end) overlap + 60 min buffer<br/>+ hours + maintenance + closure + capacity
+    AV-->>BS: AvailabilityResult (available / reason)
+
+    alt Slot is free
+        BS->>DB: Re-check availability immediately before commit
+        BS->>DB: INSERT bookings (status pending,<br/>hold_expires_at = now + 48h)
+        BS->>DB: INSERT booking_price_items (frozen price snapshot)<br/>+ booking_policy_snapshots + booking_history
+        BS->>DB: INSERT audit_logs (same transaction, NFR-016)<br/>+ notifications (new_booking)
+        BS->>DB: COMMIT
+        DB-->>BS: booking row (number, id)
+        BS-->>UI: Booking (Pending, hold until +48h)
+        UI->>UI: gr.Info("Booking created, hold 48h")
+        UI-->>U: Show Pending booking + deposit due (30 percent)
+    else Slot is taken (conflict / maintenance / hours / closure)
+        BS->>DB: ROLLBACK
+        DB-->>BS: rolled back, no rows written
+        BS-->>UI: raise BookingConflictError / HallUnavailableError
+        UI->>UI: gr.Error("Hall unavailable: reason")
+        UI-->>U: Show reason, offer another hall / time
+    end
+
+    Note over U,DB: Deposit step (same flow, later): record_payment inserts the payment,<br/>recomputes the paid total and, once the 30 percent deposit threshold is met<br/>inside the hold + 24h grace, auto-confirms the booking (BR-10), freezes the<br/>financial policy snapshot and generates the event plan, all in one transaction,<br/>and a failed step rolls back the payment too.

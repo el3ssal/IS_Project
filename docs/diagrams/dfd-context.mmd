@@ -1,0 +1,49 @@
+%% DFD — Context diagram (AS-BUILT, schema v4)
+%% One process = the whole Wedding Hall Management System.
+%% External entities: the 5 employee roles (internal users who log in),
+%% the Customer (external, NO login, NO portal — staff record everything),
+%% and the Hall as a physical resource the system schedules.
+%% No external systems: no payment gateway, no email/SMS, no cloud, no PDF service.
+%% All data stays in the local SQLite database on the venue LAN host.
+
+flowchart LR
+    Owner(["Owner"])
+    Manager(["Manager"])
+    Receptionist(["Receptionist"])
+    Accountant(["Accountant"])
+    Staff(["Staff"])
+    Customer(["Customer<br/>(no login)"])
+    Hall(["Hall<br/>(physical venue)"])
+
+    SYS(["
+        0<br/>Wedding Hall<br/>Management System<br/>
+        Gradio UI + Python logic + SQLite (schema v4)
+    "])
+
+    %% Owner
+    Owner -->|"login, role / permission config,<br/>venue + pricing + policy settings"| SYS
+    SYS -->|"dashboards, financial reports,<br/>audit log, backup file"| Owner
+
+    %% Manager
+    Manager -->|"login, bookings, reschedule / cancel /<br/>transfer, maintenance blocks,<br/>task assignment, contract approval"| SYS
+    SYS -->|"booking + task + maintenance views,<br/>notifications, reports"| Manager
+
+    %% Receptionist
+    Receptionist -->|"login, customer details, inquiries,<br/>quotations, booking requests,<br/>availability questions"| SYS
+    SYS -->|"quotations, price breakdowns,<br/>availability answers, booking confirmations"| Receptionist
+
+    %% Accountant
+    Accountant -->|"login, payment records, expense records,<br/>refund decisions, installment updates"| SYS
+    SYS -->|"financial summary, reconciliation,<br/>installment / refund status, CSV exports"| Accountant
+
+    %% Staff
+    Staff -->|"login, own task status updates"| SYS
+    SYS -->|"assigned tasks, due / overdue warnings"| Staff
+
+    %% Customer (external, no system access)
+    Customer -->|"booking request, personal details,<br/>deposit / payments in person,<br/>signed contract copy"| SYS
+    SYS -->|"quotation (via staff), booking confirmation (via staff),<br/>printed versioned contract (via staff)"| Customer
+
+    %% Hall (physical resource)
+    Hall -->|"capacity, weekly hours,<br/>special hours, maintenance windows"| SYS
+    SYS -->|"reserved time slots<br/>(confirmed bookings + active holds)"| Hall

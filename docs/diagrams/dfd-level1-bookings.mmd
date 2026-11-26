@@ -1,0 +1,90 @@
+%% DFD Level 1 — Decomposing process 4.0 "Manage Bookings" (AS-BUILT, schema v4)
+%% Sub-processes map to BookingService / AvailabilityService / PricingService
+%% methods. All of 4.1-4.3 run inside ONE BEGIN IMMEDIATE transaction
+%% (ARCHITECTURE_REVIEW 3.4 rule 1); 4.4 runs in its own payment transaction.
+%% Config: hold 48h, grace 24h, buffer 60 min, deposit 30 percent.
+%% Cancellation fee tiers (seed defaults A-43, Owner to confirm with the hall):
+%% 30+ days 10 percent, 14-29 days 25 percent, under 14 days 50 percent,
+%% capped at the amount paid. No-show: deposit forfeited by default (A-44).
+
+flowchart TB
+    Receptionist(["Receptionist"])
+    Manager(["Manager"])
+    Accountant(["Accountant"])
+    Customer(["Customer<br/>(no login)"])
+
+    subgraph P4["4.0 Manage Bookings (decomposed)"]
+        P41(["4.1 Check availability<br/>AvailabilityService<br/>.check_availability"])
+        P42(["4.2 Calculate price<br/>PricingService.calculate"])
+        P43(["4.3 Create Pending booking<br/>and start hold<br/>BookingService.create_booking"])
+        P44(["4.4 Record deposit and<br/>confirm booking<br/>BookingService.record_payment"])
+        P45(["4.5 Cancel / record no-show<br/>BookingService.cancel_booking<br/>.mark_no_show"])
+        P46(["4.6 Reschedule booking<br/>BookingService<br/>.reschedule_booking"])
+        P47(["4.7 Transfer ownership /<br/>rebook<br/>BookingService<br/>.transfer_booking"])
+    end
+
+    subgraph STORES["Data stores (SQLite, schema v4)"]
+        D3[("D3 Halls and schedules<br/>halls, hall_weekly_hours,<br/>hall_special_hours, maintenance_blocks")]
+        D4[("D4 Catalog and pricing<br/>packages, services, pricing_rules,<br/>discount_records")]
+        D5[("D5 Quotations and bookings<br/>quotations, bookings, booking_services,<br/>booking_price_items, booking_policy_snapshots,<br/>booking_history, reschedule_history,<br/>booking_transfers")]
+        D8[("D8 Finance<br/>payments, installments,<br/>financial_policy_snapshots,<br/>cancellation_records, no_show_records,<br/>refunds")]
+        D9[("D9 System<br/>notifications, audit_logs")]
+        D6[("D6 Contracts and files<br/>contracts, contract_versions")]
+        D7[("D7 Operations<br/>event_plans, tasks")]
+    end
+
+    %% ---- inputs ----
+    Receptionist -->|"date / time, hall,<br/>guests, package, services"| P41
+    Receptionist -->|"accepted quotation<br/>or direct request"| P43
+    Manager -->|"cancel / reschedule /<br/>transfer request"| P45
+    Manager -->|"new date / time / hall"| P46
+    Accountant -->|"deposit payment record<br/>(method, amount, reference)"| P44
+    Customer -.->|"pays deposit in person"| P44
+
+    %% ---- 4.1 availability ----
+    P41 -->|"read hall status, hours,<br/>special hours, maintenance"| D3
+    P41 -->|"read confirmed bookings<br/>+ active Pending holds"| D5
+    P41 -->|"available / reason<br/>(conflict, hours, maintenance,<br/>closure, capacity, buffer)"| P42
+    P41 -->|"unavailable + reason"| Receptionist
+
+    %% ---- 4.2 price ----
+    P42 -->|"read package, services,<br/>pricing rules, discounts"| D4
+    P42 -->|"itemised breakdown<br/>+ total (piasters)"| P43
+
+    %% ---- 4.3 create (inside BEGIN IMMEDIATE) ----
+    P43 -->|"expire overdue holds,<br/>re-check availability"| P41
+    P43 -->|"INSERT booking (pending,<br/>hold_expires_at +48h)"| D5
+    P43 -->|"INSERT frozen price items<br/>+ policy snapshot + history"| D5
+    P43 -->|"audit row + new_booking /<br/>hold_expiring notification"| D9
+    P43 -->|"Pending booking +<br/>deposit due (30 percent)"| Receptionist
+
+    %% ---- 4.4 deposit + confirm ----
+    P44 -->|"read booking, paid total"| D5
+    P44 -->|"INSERT payment<br/>(idempotency key, no duplicates)"| D8
+    P44 -->|"deposit threshold met<br/>inside hold + 24h grace"| P44
+    P44 -->|"status confirmed,<br/>installment plan,<br/>financial policy snapshot"| D5
+    P44 -->|"financial snapshot"| D8
+    P44 -->|"audit row + payment_received<br/>notification"| D9
+    P44 -->|"trigger: generate contract"| D6
+    P44 -->|"trigger: generate event plan"| D7
+    P44 -->|"confirmation (via staff)"| Customer
+
+    %% ---- 4.5 cancel / no-show ----
+    P45 -->|"read booking +<br/>confirmation-time snapshot"| D5
+    P45 -->|"fee + refundable from<br/>frozen snapshot"| D8
+    P45 -->|"INSERT cancellation_record /<br/>no_show_record"| D8
+    P45 -->|"status cancelled / no_show,<br/>hall time released at once"| D5
+    P45 -->|"refund request if money due"| D8
+    P45 -->|"audit row + notification"| D9
+
+    %% ---- 4.6 reschedule ----
+    P46 -->|"atomic re-check + re-price<br/>(same validation as 4.1/4.2)"| P41
+    P46 -->|"atomic re-check + re-price"| P42
+    P46 -->|"old slot freed, new slot held,<br/>price delta recorded"| D5
+    P46 -->|"audit row + notification,<br/>task due dates shift"| D9
+    P46 -->|"contract NOT auto-regenerated"| D6
+
+    %% ---- 4.7 transfer / rebook ----
+    P47 -->|"old / new owner, reason,<br/>approver preserved"| D5
+    P47 -->|"new booking linked via<br/>previous_booking_id"| D5
+    P47 -->|"audit row"| D9

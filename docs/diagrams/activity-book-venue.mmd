@@ -1,0 +1,39 @@
+%% Activity diagram — "Book a venue" (AS-BUILT, schema v4)
+%% Flow: quotation -> accept -> Pending booking (48h hold) -> deposit (30 percent)
+%% -> Confirmed -> contract -> event plan / tasks.
+%% Sources: BookingService.create_booking / record_payment, QuotationService,
+%% AvailabilityService.check_availability, PricingService.calculate,
+%% ContractService.generate_contract, TaskService.generate_event_plan.
+%% Config (config/settings.py + system_settings): hold 48h, grace 24h,
+%% buffer 60 min, deposit 30 percent. Money is integer piasters.
+%% Error paths use the real exceptions: BookingConflictError, HallUnavailableError,
+%% InsufficientDepositError, ValidationError (shown in the UI as gr.Error).
+
+flowchart TB
+    Start([Start: customer asks for a date]) --> FindCustomer["Find or create customer<br/>(CustomerService: duplicate check<br/>on normalized phone / email / National ID)"]
+    FindCustomer --> Dup{Duplicate<br/>found?}
+    Dup -- Yes, confirmed duplicate --> DupBlock["Block creation / show possible matches<br/>for staff review (no auto-merge)"] --> FindCustomer
+    Dup -- No --> Quote["Create quotation<br/>(QuotationService.create_quotation:<br/>hall, event type, package, guests,<br/>services, start / end)"]
+    Quote --> Price["Calculate itemised price<br/>(PricingService.calculate:<br/>hall + package + pricing rules<br/>+ services + extra guests - discount)"]
+    Price --> AvailQ{"Availability check<br/>(AvailabilityService:<br/>hall active, hours, special hours,<br/>maintenance, conflicts, buffer)?"}
+    AvailQ -- Unavailable --> ReasonQ["Show reason (conflict / hours /<br/>maintenance / closure) and<br/>offer another hall or time"] --> Quote
+    AvailQ -- Available --> SendQ["Send quotation to customer<br/>(status draft -> sent, valid_until set)<br/>NOTE: quotation reserves NOTHING (BR-08)"]
+    SendQ --> CustDec{Customer<br/>accepts before<br/>valid_until?}
+    CustDec -- No / expired --> ExpQ["Quotation expires<br/>(status expired)"] --> End1([End: no booking])
+    CustDec -- Yes --> Accept["Accept quotation<br/>(QuotationService.accept_quotation)"]
+    Accept --> ReCheck{"Re-check availability<br/>immediately before insert<br/>(BEGIN IMMEDIATE, BR-09)?"}
+    ReCheck -- Time taken meanwhile --> Conflict1["Reject conversion:<br/>BookingConflictError<br/>(friendly message, no booking created)"] --> End2([End: offer another slot])
+    ReCheck -- Still free --> CapCheck{"Guest count within<br/>hall capacity (BR-06)<br/>and duration at least<br/>package minimum (BR-07)?"}
+    CapCheck -- No --> CapBlock["Reject: ValidationError<br/>(over-capacity / too short)<br/>no booking created"] --> End2
+    CapCheck -- Yes --> CreateB["Create Pending booking<br/>(BookingService.create_booking:<br/>freeze price snapshot + policy<br/>snapshot, hold_expires_at = now + 48h)"]
+    CreateB --> HoldNote["Hold reserves the hall exclusively<br/>(BR-03). Notify Manager / Receptionist<br/>(new_booking, hold_expiring)"]
+    HoldNote --> DepositWait["Wait for deposit payment<br/>(recorded by staff: cash / bank /<br/>card / InstaPay — no gateway)"]
+    DepositWait --> HoldExpired{Deposit recorded<br/>before hold end<br/>+ 24h grace?}
+    HoldExpired -- No --> ExpireB["Booking Expired, hall time released<br/>(lazy sweep: BookingService.sweep_expired_holds)"] --> End3([End: customer must start again])
+    HoldExpired -- Yes --> DepositAmt{Paid amount reaches<br/>30 percent deposit<br/>threshold?}
+    DepositAmt -- No --> Insuff["InsufficientDepositError:<br/>booking stays Pending,<br/>outstanding deposit shown"] --> DepositWait
+    DepositAmt -- Yes --> Confirm["Auto-confirm booking<br/>(BR-10, no separate approval):<br/>status pending -> confirmed,<br/>installment plan created,<br/>financial policy snapshot frozen"]
+    Confirm --> Contract["Generate contract<br/>(ContractService.generate_contract:<br/>versioned HTML from template,<br/>unique contract number)"]
+    Contract --> Plan["Generate event plan<br/>(TaskService.generate_event_plan:<br/>checklist copied from task templates<br/>matching event type / package)"]
+    Plan --> Assign["Manager assigns tasks to staff<br/>(conflict = WARNING only, BR-18;<br/>decision recorded in audit)"]
+    Assign --> Done([End: Confirmed booking<br/>with contract + event plan])

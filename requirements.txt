@@ -1,0 +1,6 @@
+# Wedding Hall Management System — dependencies (Phase 1)
+# Everything else is Python 3.12 standard library (sqlite3, hashlib,
+# secrets, logging, dataclasses). Gradio is the only third-party
+# dependency: the instructor deck's sequence diagrams prescribe a
+# Gradio browser UI (GAP G-04) and the SRS (§0.1, §17) names it.
+gradio>=5,<7

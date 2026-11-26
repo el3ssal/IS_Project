@@ -1,0 +1,202 @@
+%% Use Case diagram — Wedding Hall Management System (AS-BUILT, schema v4)
+%% Source of truth: wedding_hall_system/ui/app.py (real Gradio tabs),
+%% wedding_hall_system/config/defaults.py (5 roles), docs/REQUIREMENT_TRACEABILITY_MATRIX.md
+%% Notes:
+%% - Customers have NO login and NO portal (SRS 1.4). Customer appears only as an
+%%   external actor who phones / visits / pays in person; staff record everything.
+%% - No customer portal, no payment gateway, no email/SMS, no e-signature,
+%%   no PDF export (contracts are versioned HTML, printable to PDF from the browser),
+%%   no drag-and-drop calendar: the Phase 7 calendar (FR-057/FR-058) is a table
+%%   of events (bookings, Pending holds, maintenance, closures/special hours)
+%%   plus a reschedule form that delegates to BookingService.reschedule_booking.
+%% - Phase 7 built: full Owner Settings screen (FR-067, SettingsService —
+%%   edit is Owner-only, view is Owner + Manager) and manual backup/restore
+%%   UI (FR-068, BackupService — Owner-only; validate + safety copy before
+%%   restore, manifest JSON sidecar, storage/ files inventoried not copied).
+%%   booking includes the availability check; deposit payment includes auto-confirm
+%%   (BookingService.record_payment confirms the booking once the 30 percent
+%%   deposit threshold is met — no separate approval step, BR-10).
+
+flowchart TB
+    %% ---------------- actors ----------------
+    Owner(["Owner"])
+    Manager(["Manager"])
+    Receptionist(["Receptionist"])
+    Accountant(["Accountant"])
+    Staff(["Staff"])
+    Customer(["Customer<br/>(external, no login)"])
+
+    %% ---------------- system boundary ----------------
+    subgraph SYS["Wedding Hall Management System — Gradio + SQLite (schema v4)"]
+        direction TB
+
+        subgraph AUTH["Auth and account"]
+            UC_Login["Log in (username + password)"]
+            UC_ChangePW["Change own password"]
+            UC_ResetPW["Reset an employee password"]
+            UC_ManageUsers["Enable / disable employee accounts"]
+            UC_ManageRoles["Configure roles and permissions"]
+        end
+
+        subgraph CATALOG["Halls, catalog and pricing"]
+            UC_Halls["Manage halls (create / update / deactivate)"]
+            UC_Hours["Manage weekly hours, special hours, closures"]
+            UC_Maint["Record maintenance blocks"]
+            UC_EventTypes["Manage event types"]
+            UC_Packages["Manage packages"]
+            UC_Services["Manage service catalog"]
+            UC_PricingRules["Manage pricing rules and discounts"]
+            UC_PriceCalc["Calculate a price breakdown"]
+        end
+
+        subgraph SALES["Customers, quotations and bookings"]
+            UC_Customers["Manage customer records"]
+            UC_DupCheck["Detect duplicate customers"]
+            UC_Interactions["Record customer interactions"]
+            UC_Quotations["Create / send quotations"]
+            UC_AcceptQuote["Accept a quotation"]
+            UC_CreateBooking["Create a booking (Pending, 48h hold)"]
+            UC_AvailSearch["Check hall availability"]
+            UC_BookingDetail["View booking timeline and details"]
+            UC_UpdateNotes["Update booking notes"]
+            UC_Reschedule["Reschedule a booking"]
+            UC_Transfer["Transfer booking ownership"]
+            UC_Cancel["Cancel a booking"]
+            UC_NoShow["Record a no-show"]
+            UC_Rebook["Rebook from a Cancelled / Expired booking"]
+            UC_Progress["Mark booking In Progress / Completed"]
+        end
+
+        subgraph OPS["Contracts, plans, tasks and staff"]
+            UC_Templates["Manage contract templates"]
+            UC_Contract["Generate a versioned contract (HTML)"]
+            UC_SignStatus["Record signature status / upload signed copy"]
+            UC_Plans["Generate and edit event plans"]
+            UC_TaskTemplates["Manage task templates"]
+            UC_Tasks["Create / assign / reassign tasks"]
+            UC_MyTasks["View and update own assigned tasks"]
+            UC_StaffProfiles["Manage staff profiles and availability"]
+            UC_Notifs["View in-app notifications"]
+        end
+
+        subgraph FINANCE["Finance"]
+            UC_Payments["Record a payment (cash / bank / card / InstaPay)"]
+            UC_Reverse["Reverse / void a payment (correction)"]
+            UC_Installments["Manage installment plans"]
+            UC_Expenses["Record and approve expenses"]
+            UC_Refunds["Request / approve / pay a refund"]
+            UC_Reconcile["Reconcile cash and view financial summary"]
+        end
+
+        subgraph REPORTS["Reports, search, files, dashboards"]
+            UC_Dashboards["View role dashboard and Pending bookings"]
+            UC_Search["Advanced and global search"]
+            UC_Reports["Run 8 reports and export CSV"]
+            UC_AuditSearch["Search the audit log"]
+            UC_Files["Upload / download / preview attachments"]
+            UC_Language["Switch language (Arabic / English)"]
+        end
+
+        subgraph CALENDAR["Calendar"]
+            UC_Calendar["View calendar (bookings, holds, maintenance, closures)"]
+            UC_CalReschedule["Reschedule a booking from the calendar"]
+        end
+
+        subgraph ADMIN["Settings and backup"]
+            UC_Settings["Edit system settings (Owner)"]
+            UC_ViewSettings["View system settings"]
+            UC_Backup["Create / restore a manual backup (Owner)"]
+        end
+    end
+
+    %% ---------------- actor links ----------------
+    Owner --> UC_Login
+    Owner --> UC_ResetPW
+    Owner --> UC_ManageUsers
+    Owner --> UC_ManageRoles
+    Owner --> UC_Halls
+    Owner --> UC_Packages
+    Owner --> UC_Services
+    Owner --> UC_PricingRules
+    Owner --> UC_EventTypes
+    Owner --> UC_Templates
+    Owner --> UC_Reports
+    Owner --> UC_AuditSearch
+    Owner --> UC_Settings
+    Owner --> UC_ViewSettings
+    Owner --> UC_Backup
+    Owner --> UC_Calendar
+    Owner --> UC_CalReschedule
+    Owner --> UC_Dashboards
+
+    Manager --> UC_Login
+    Manager --> UC_Halls
+    Manager --> UC_Hours
+    Manager --> UC_Maint
+    Manager --> UC_CreateBooking
+    Manager --> UC_Reschedule
+    Manager --> UC_Transfer
+    Manager --> UC_Cancel
+    Manager --> UC_Plans
+    Manager --> UC_TaskTemplates
+    Manager --> UC_Tasks
+    Manager --> UC_StaffProfiles
+    Manager --> UC_Contract
+    Manager --> UC_SignStatus
+    Manager --> UC_Dashboards
+    Manager --> UC_Reports
+    Manager --> UC_Notifs
+    Manager --> UC_Progress
+    Manager --> UC_Calendar
+    Manager --> UC_CalReschedule
+    Manager --> UC_ViewSettings
+
+    Receptionist --> UC_Login
+    Receptionist --> UC_Customers
+    Receptionist --> UC_DupCheck
+    Receptionist --> UC_Interactions
+    Receptionist --> UC_Quotations
+    Receptionist --> UC_AcceptQuote
+    Receptionist --> UC_CreateBooking
+    Receptionist --> UC_AvailSearch
+    Receptionist --> UC_PriceCalc
+    Receptionist --> UC_BookingDetail
+    Receptionist --> UC_UpdateNotes
+    Receptionist --> UC_Dashboards
+    Receptionist --> UC_Search
+    Receptionist --> UC_Notifs
+    Receptionist --> UC_Files
+    Receptionist --> UC_Calendar
+
+    Accountant --> UC_Login
+    Accountant --> UC_Payments
+    Accountant --> UC_Reverse
+    Accountant --> UC_Installments
+    Accountant --> UC_Expenses
+    Accountant --> UC_Refunds
+    Accountant --> UC_Reconcile
+    Accountant --> UC_Reports
+    Accountant --> UC_Dashboards
+    Accountant --> UC_Search
+    Accountant --> UC_Calendar
+
+    Staff --> UC_Login
+    Staff --> UC_MyTasks
+    Staff --> UC_Dashboards
+    Staff --> UC_Notifs
+    Staff --> UC_ChangePW
+
+    %% Customer: no login; interacts with staff outside the system
+    Customer -. "provides details, receives quotation,<br/>pays deposit in person" .-> Receptionist
+    Customer -. "pays in person (recorded by staff)" .-> Accountant
+    Customer -. "signs printed contract copy" .-> Manager
+
+    %% ---------------- includes (real code dependencies only) ----------------
+    UC_CreateBooking -->|"<<include>>"| UC_AvailSearch
+    UC_AcceptQuote -->|"<<include>>"| UC_CreateBooking
+    UC_Cancel -->|"<<include>>"| UC_Refunds
+    UC_Contract -->|"<<include>>"| UC_Templates
+    UC_Plans -->|"<<include>>"| UC_TaskTemplates
+    UC_Reschedule -->|"<<include>>"| UC_AvailSearch
+    UC_CalReschedule -->|"<<include>>"| UC_Reschedule
+    UC_Rebook -->|"<<include>>"| UC_CreateBooking

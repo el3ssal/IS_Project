@@ -1,0 +1,123 @@
+%% DFD Level 0 — Wedding Hall Management System (AS-BUILT, schema v4)
+%% Processes follow ARCHITECTURE_REVIEW section 4 (P1-P9) plus the Phase 7
+%% additions P10 Calendar and P11 Settings. Data stores D1-D9 map to the REAL
+%% tables of schema.sql (54 tables, schema v4 — unchanged in Phase 7, no
+%% migration). Money is integer piasters; timestamps are ISO-8601 Africa/Cairo.
+%% No external systems: no payment gateway, no email/SMS, no cloud service.
+%% Backup (P9) is BackupService with a "Backup & Restore" UI tab (FR-068,
+%% Phase 7): validate, safety copy, restore. Calendar (P10) is a table view,
+%% no drag-and-drop (FR-057/FR-058, Phase 7); rescheduling from the calendar
+%% delegates to 4.0 Manage Bookings.
+
+flowchart TB
+    Owner(["Owner"])
+    Manager(["Manager"])
+    Receptionist(["Receptionist"])
+    Accountant(["Accountant"])
+    Staff(["Staff"])
+    Customer(["Customer<br/>(no login)"])
+
+    subgraph PROCS["Processes"]
+        P1(["1.0 Auth<br/>AuthService, permissions.py"])
+        P2(["2.0 Manage Halls and Pricing<br/>HallService, CatalogService,<br/>PricingService"])
+        P3(["3.0 Manage Customers<br/>and Quotations<br/>CustomerService,<br/>QuotationService"])
+        P4(["4.0 Manage Bookings<br/>BookingService"])
+        P5(["5.0 Check Availability<br/>AvailabilityService"])
+        P6(["6.0 Manage Contracts,<br/>Tasks and Staff<br/>ContractService, TaskService,<br/>StaffService"])
+        P7(["7.0 Manage Finance<br/>PaymentService, ExpenseService,<br/>RefundService"])
+        P8(["8.0 Reports, Search<br/>and Notifications<br/>ReportService, SearchService,<br/>NotificationService, AuditService"])
+        P9(["9.0 Manual Backup & Restore<br/>BackupService"])
+        P10(["10.0 Calendar<br/>CalendarService"])
+        P11(["11.0 Settings<br/>SettingsService"])
+    end
+
+    subgraph STORES["Data stores (SQLite, schema v4)"]
+        D1[("D1 Auth<br/>employees, roles, permissions,<br/>role_permissions, employee_roles,<br/>login_attempts, sessions")]
+        D2[("D2 Customers<br/>customers, customer_contacts,<br/>customer_interactions")]
+        D3[("D3 Halls and schedules<br/>halls, hall_weekly_hours,<br/>hall_special_hours, maintenance_blocks")]
+        D4[("D4 Catalog and pricing<br/>event_types, packages, package_halls,<br/>package_event_types, services,<br/>package_services, service_halls,<br/>pricing_rules, discount_records")]
+        D5[("D5 Quotations and bookings<br/>quotations, quotation_items, bookings,<br/>booking_services, booking_price_items,<br/>booking_policy_snapshots, booking_history,<br/>reschedule_history, booking_transfers")]
+        D6[("D6 Contracts and files<br/>contracts, contract_versions, attachments")]
+        D7[("D7 Operations<br/>employee_availability, event_plans,<br/>task_templates, task_template_items,<br/>tasks, task_history")]
+        D8[("D8 Finance<br/>payments, payment_corrections,<br/>installments, expenses, refunds,<br/>financial_policy_snapshots,<br/>cancellation_records, no_show_records")]
+        D9[("D9 System<br/>notifications, audit_logs,<br/>system_settings, backup_records,<br/>schema_version")]
+    end
+
+    %% ---- external entities to processes ----
+    Owner -->|"login, configure roles,<br/>permissions"| P1
+    Manager -->|"login"| P1
+    Receptionist -->|"login"| P1
+    Accountant -->|"login"| P1
+    Staff -->|"login"| P1
+    Owner -->|"hall / package / service /<br/>pricing configuration"| P2
+    Manager -->|"maintenance blocks,<br/>hall configuration"| P2
+    Receptionist -->|"customer details, inquiries"| P3
+    Customer -.->|"request, details, deposit<br/>(in person, via staff)"| P3
+    Receptionist -->|"booking request"| P4
+    Manager -->|"booking lifecycle actions"| P4
+    Accountant -->|"payment / expense / refund records"| P7
+    Manager -->|"task assignment, contract actions"| P6
+    Staff -->|"own task status updates"| P6
+    Owner -->|"create / validate / download /<br/>restore backup"| P9
+    Owner -->|"edit system settings"| P11
+    Manager -->|"view system settings"| P11
+    Owner -->|"view calendar"| P10
+    Manager -->|"view calendar, reschedule<br/>from calendar"| P10
+    Receptionist -->|"view calendar"| P10
+    Accountant -->|"view calendar"| P10
+
+    %% ---- processes to stores ----
+    P1 <-->|"read / write credentials,<br/>roles, sessions"| D1
+    P11 <-->|"read / write system_settings"| D9
+    P2 <-->|"read / write halls, hours,<br/>maintenance, catalog, pricing"| D3
+    P2 <-->|"read / write catalog, pricing"| D4
+    P3 <-->|"read / write customers,<br/>interactions"| D2
+    P3 <-->|"read / write quotations"| D5
+    P3 -->|"availability question"| P5
+    P4 <-->|"read / write bookings,<br/>price + policy snapshots, history"| D5
+    P4 -->|"availability question"| P5
+    P4 -->|"deposit / confirmation triggers"| P7
+    P4 -->|"confirmed booking triggers<br/>contract + event plan"| P6
+    P5 -->|"read bookings, blocks,<br/>hours, hall status"| D3
+    P5 -->|"read bookings, holds"| D5
+    P6 <-->|"read / write contracts,<br/>versions, attachments"| D6
+    P6 <-->|"read / write plans, tasks,<br/>templates, availability"| D7
+    P6 -->|"read booking data"| D5
+    P7 <-->|"read / write payments,<br/>installments, expenses,<br/>refunds, cancellations"| D8
+    P7 -->|"read booking totals"| D5
+    P8 -->|"read all stores"| D1
+    P8 -->|"read all stores"| D2
+    P8 -->|"read all stores"| D5
+    P8 -->|"read all stores"| D8
+    P8 <-->|"read / write notifications,<br/>audit log"| D9
+    P9 -->|"read live database file;<br/>validate backup (checksum,<br/>integrity, schema version)"| D9
+    P9 -->|"write backup_records;<br/>safety copy, then restore"| D9
+    P10 -->|"read bookings, Pending holds"| D5
+    P10 -->|"read maintenance blocks,<br/>special hours, closures"| D3
+    P10 -->|"read customer names"| D2
+    P10 -->|"reschedule request (delegates<br/>to 4.0 Manage Bookings)"| P4
+
+    %% ---- audit: every process writes audit rows via AuditService ----
+    P2 -.->|"audit rows"| D9
+    P3 -.->|"audit rows"| D9
+    P4 -.->|"audit rows"| D9
+    P6 -.->|"audit rows"| D9
+    P7 -.->|"audit rows"| D9
+    P9 -.->|"audit rows"| D9
+    P11 -.->|"audit rows"| D9
+
+    %% ---- outputs back to entities ----
+    P8 -->|"role dashboards, 8 reports,<br/>CSV exports, search results"| Owner
+    P8 -->|"dashboards, reports, notifications"| Manager
+    P8 -->|"dashboards, search results,<br/>notifications"| Receptionist
+    P8 -->|"financial reports, reconciliation,<br/>notifications"| Accountant
+    P8 -->|"own tasks, notifications"| Staff
+    P4 -->|"booking confirmation (via staff)"| Customer
+    P6 -->|"printed versioned contract (via staff)"| Customer
+    P9 -->|"backup file (download),<br/>validation result"| Owner
+    P10 -->|"calendar events, booking detail"| Owner
+    P10 -->|"calendar events, booking detail"| Manager
+    P10 -->|"calendar events"| Receptionist
+    P10 -->|"calendar events"| Accountant
+    P11 -->|"settings values"| Owner
+    P11 -->|"settings values (read-only)"| Manager

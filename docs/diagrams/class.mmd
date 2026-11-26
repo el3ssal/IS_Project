@@ -1,0 +1,444 @@
+%% Class diagram — APPENDIX (AS-BUILT, schema v4)
+%% Real dataclasses from wedding_hall_system/logic/models.py, plus the
+%% three Phase 7 service classes appended at the end (BackupService,
+%% SettingsService, CalendarService — services, not dataclasses).
+%% Field types are simplified for the diagram (the code uses int | None,
+%% datetime | None, list[str] / list[int] where a value may be absent).
+%% Money is integer piasters everywhere; datetimes are venue time (Africa/Cairo).
+%% Note: models.py has NO separate dataclass for the link tables
+%% (employee_roles, package_halls, package_services, service_halls,
+%% package_event_types, role_permissions) — those are plain join rows in SQL,
+%% shown here as associations. Employee.roles is a list of role names.
+
+classDiagram
+    class Role {
+        +int id
+        +string name
+        +string description
+    }
+    class Permission {
+        +int id
+        +string code
+        +string description
+    }
+    class Employee {
+        +int id
+        +string username
+        +string full_name
+        +string phone
+        +string email
+        +string specialties
+        +bool is_active
+        +list roles
+        +display_name() string
+        +has_role(role) bool
+    }
+    class Session {
+        +int id
+        +int employee_id
+        +string token_hash
+        +datetime expires_at
+        +is_expired(now) bool
+    }
+    class Hall {
+        +int id
+        +string name
+        +string description
+        +int capacity
+        +int base_price
+        +string status
+        +list facilities
+        +string notes
+        +bool is_active
+        +is_bookable() bool
+        +facilities_json() string
+    }
+    class HallWeeklyHours {
+        +int id
+        +int hall_id
+        +int weekday
+        +string open_time
+        +string close_time
+        +bool is_closed
+    }
+    class HallSpecialHours {
+        +int id
+        +int hall_id
+        +string date
+        +string open_time
+        +string close_time
+        +bool is_closed
+        +string reason
+    }
+    class MaintenanceBlock {
+        +int id
+        +int hall_id
+        +string type
+        +string description
+        +datetime start_at
+        +datetime end_at
+        +int recorded_by
+    }
+    class EventType {
+        +int id
+        +string name
+        +int default_duration_min
+        +bool is_active
+    }
+    class Package {
+        +int id
+        +string name
+        +string description
+        +int base_price
+        +int default_duration_min
+        +int min_duration_min
+        +int included_guests
+        +int extra_guest_price
+        +bool is_active
+        +list hall_ids
+        +list event_type_ids
+        +list service_ids
+    }
+    class Service {
+        +int id
+        +string name
+        +string description
+        +string pricing_method
+        +int unit_price
+        +bool is_active
+        +list hall_ids
+    }
+    class PricingRule {
+        +int id
+        +string name
+        +int hall_id
+        +int package_id
+        +int event_type_id
+        +int weekday
+        +string season
+        +string adjustment_type
+        +int adjustment_value
+        +bool is_active
+        +matches(...) bool
+    }
+    class ServiceSelection {
+        +int service_id
+        +int quantity
+        +int duration_min
+    }
+    class PriceItem {
+        +string kind
+        +string label
+        +int amount
+    }
+    class PriceBreakdown {
+        +list items
+        +int hall_id
+        +int package_id
+        +int event_type_id
+        +int guests
+        +int duration_min
+        +total() int
+        +total_by_kind(kind) int
+    }
+    class Customer {
+        +int id
+        +string full_name
+        +string phone
+        +string phone_normalized
+        +string email
+        +string email_normalized
+        +string address
+        +string national_id
+        +string notes
+        +list additional_phones
+        +masked_national_id() string
+    }
+    class CustomerInteraction {
+        +int id
+        +int customer_id
+        +int employee_id
+        +string type
+        +string summary
+    }
+    class Quotation {
+        +int id
+        +string number
+        +int customer_id
+        +int hall_id
+        +int event_type_id
+        +int package_id
+        +datetime start_at
+        +datetime end_at
+        +int guest_count
+        +int total_amount
+        +string status
+        +datetime valid_until
+        +int created_by
+        +is_expired_by_time() bool
+    }
+    class QuotationItem {
+        +int id
+        +int quotation_id
+        +string kind
+        +string label
+        +int amount
+    }
+    class Booking {
+        +int id
+        +string number
+        +int customer_id
+        +int hall_id
+        +int quotation_id
+        +int event_type_id
+        +int package_id
+        +datetime start_at
+        +datetime end_at
+        +int guest_count
+        +string status
+        +int total_amount
+        +int deposit_required
+        +int deposit_paid
+        +datetime hold_expires_at
+        +datetime grace_expires_at
+        +string additional_contact_phone
+        +string notes
+        +int previous_booking_id
+        +int created_by
+        +datetime created_at
+        +is_active_hold() bool
+        +outstanding() int
+    }
+    class BookingHistory {
+        +int id
+        +int booking_id
+        +int employee_id
+        +string action
+        +string old_value
+        +string new_value
+        +string reason
+    }
+    class Payment {
+        +int id
+        +string number
+        +int booking_id
+        +int amount
+        +string method
+        +string reference
+        +string status
+        +string idempotency_key
+        +datetime initiated_at
+        +datetime confirmed_at
+        +int recorded_by
+    }
+    class Installment {
+        +int id
+        +int booking_id
+        +int sequence
+        +int amount
+        +datetime due_at
+        +string status
+        +int paid_payment_id
+        +int late_fee_piasters
+    }
+    class Expense {
+        +int id
+        +int amount
+        +string date
+        +string category
+        +string description
+        +string method
+        +string scope_type
+        +int scope_id
+        +int recorded_by
+        +string approval_status
+        +string payment_status
+    }
+    class Refund {
+        +int id
+        +int payment_id
+        +int booking_id
+        +int amount
+        +string reason
+        +string method
+        +string status
+        +int created_by
+        +int approved_by
+        +datetime approved_at
+        +datetime paid_at
+    }
+    class Contract {
+        +int id
+        +string number
+        +int booking_id
+        +string template_name
+        +int current_version_id
+        +string signature_status
+        +string signature_date
+    }
+    class ContractVersion {
+        +int id
+        +int contract_id
+        +int version
+        +string body
+        +int created_by
+    }
+    class Attachment {
+        +int id
+        +string entity_type
+        +int entity_id
+        +string original_filename
+        +string storage_filename
+        +string mime_type
+        +int size_bytes
+        +string category
+        +int uploaded_by
+        +bool is_deleted
+    }
+    class EmployeeAvailability {
+        +int id
+        +int employee_id
+        +string date
+        +string start_time
+        +string end_time
+        +string kind
+        +string note
+    }
+    class EventPlan {
+        +int id
+        +int booking_id
+    }
+    class TaskTemplate {
+        +int id
+        +string name
+        +int event_type_id
+        +int package_id
+        +bool is_active
+    }
+    class TaskTemplateItem {
+        +int id
+        +int template_id
+        +string name
+        +string description
+        +int default_due_offset_min
+        +string priority
+    }
+    class Task {
+        +int id
+        +int event_plan_id
+        +int booking_id
+        +int service_id
+        +string name
+        +string description
+        +int assigned_to
+        +string priority
+        +datetime due_at
+        +string status
+    }
+    class TaskHistory {
+        +int id
+        +int task_id
+        +int employee_id
+        +string action
+        +string old_value
+        +string new_value
+    }
+    class Notification {
+        +int id
+        +int recipient_role_id
+        +int recipient_employee_id
+        +string type
+        +string title
+        +string body
+        +string priority
+        +string entity_type
+        +int entity_id
+        +bool is_read
+    }
+
+    %% ---- Phase 7 services (logic/backup_service.py,
+    %% logic/settings_service.py, logic/calendar_service.py) ----
+    %% Real public methods; employee is the acting Employee in each call.
+    %% DatabaseManager and BookingService are shown only as collaborators,
+    %% with the members these three services actually call.
+    class BackupService {
+        +DatabaseManager db
+        +AppSettings settings
+        +Path dir
+        +create_backup(employee) dict
+        +list_backups(employee) list
+        +download_backup(employee, backup_id) Path
+        +validate_backup(employee, backup_id) dict
+        +restore_backup(employee, backup_id, confirm) dict
+    }
+    class SettingsService {
+        +DatabaseManager db
+        +AppSettings settings
+        +list_settings(employee) list
+        +update_setting(employee, key, raw_value) dict
+    }
+    class CalendarService {
+        +DatabaseManager db
+        +AppSettings settings
+        +BookingService bookings
+        +list_events(employee, date_from, date_to, hall_id) list
+        +booking_detail(employee, booking_id) dict
+        +reschedule_from_calendar(employee, booking_id, new_start_at, new_end_at, reason) Booking
+    }
+    class DatabaseManager {
+        +backup_to(dest) tuple
+        +current_version() int
+    }
+    class BookingService {
+        +reschedule_booking(employee, booking_id, new_start_at, new_end_at, reason) Booking
+    }
+
+    %% ---- associations (mirror the schema.sql foreign keys) ----
+    Employee "1" -- "0..*" Role : holds
+    Employee "1" -- "0..*" Session : logs in with
+    Hall "1" -- "0..*" HallWeeklyHours : has
+    Hall "1" -- "0..*" HallSpecialHours : has
+    Hall "1" -- "0..*" MaintenanceBlock : blocked by
+    Package "0..*" -- "0..*" Hall : suitable for
+    Package "0..*" -- "0..*" EventType : suitable for
+    Package "0..*" -- "0..*" Service : includes
+    Service "0..*" -- "0..*" Hall : can be hosted in
+    PricingRule "0..*" -- "0..1" Hall : applies to
+    PricingRule "0..*" -- "0..1" Package : applies to
+    PricingRule "0..*" -- "0..1" EventType : applies to
+    PriceBreakdown "1" *-- "1..*" PriceItem : consists of
+    Customer "1" -- "0..*" CustomerInteraction : has
+    Customer "1" -- "0..*" Quotation : receives
+    Quotation "1" *-- "0..*" QuotationItem : frozen price of
+    Quotation "0..1" -- "0..1" Booking : converts to
+    Customer "1" -- "0..*" Booking : books
+    Hall "1" -- "0..*" Booking : hosts
+    Package "0..1" -- "0..*" Booking : priced by
+    EventType "0..1" -- "0..*" Booking : typed as
+    Booking "1" -- "0..*" BookingHistory : timeline of
+    Booking "1" -- "0..1" Booking : rebooks from
+    Booking "1" -- "0..*" Payment : paid by
+    Booking "1" -- "0..*" Installment : split into
+    Payment "1" -- "0..*" Refund : refunded by
+    Booking "1" -- "1" Contract : has
+    Contract "1" *-- "1..*" ContractVersion : versioned as
+    Booking "1" -- "1" EventPlan : planned as
+    EventPlan "1" *-- "0..*" Task : checklist of
+    TaskTemplate "1" *-- "1..*" TaskTemplateItem : lines of
+    TaskTemplate "0..*" -- "0..*" EventType : matches
+    TaskTemplate "0..*" -- "0..*" Package : matches
+    Task "0..*" -- "0..1" Service : delivers
+    Task "0..*" -- "0..1" Employee : assigned to
+    Task "1" -- "0..*" TaskHistory : history of
+    Employee "1" -- "0..*" EmployeeAvailability : declares
+    Employee "1" -- "0..*" Notification : receives
+    Role "1" -- "0..*" Notification : targeted at
+    Employee "1" -- "0..*" Expense : records
+    Employee "1" -- "0..*" Payment : records
+    Employee "1" -- "0..*" Attachment : uploads
+
+    %% ---- Phase 7 service associations ----
+    BackupService --> DatabaseManager : uses
+    SettingsService --> DatabaseManager : uses
+    CalendarService --> DatabaseManager : uses
+    CalendarService --> BookingService : delegates reschedule to
