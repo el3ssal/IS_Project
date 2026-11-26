@@ -1,15 +1,18 @@
-"""RTL + theme tests (post-Phase 8 polish).
+"""RTL tests (post-Phase 8 polish, theme reverted).
 
 The app is fully bilingual but the page itself stayed LTR: Gradio has
 no ``rtl`` flag, so the whole-page direction must come from the
-``<html dir>`` attribute, flipped live by ``ui/theme.py`` (a hidden
-``gr.HTML`` direction signal + a ``MutationObserver`` in the launch
-JavaScript that reads it through the ``<gradio-app>`` shadow DOM).
+hidden direction signal (``ui/rtl.py``). The primary mechanism is
+pure CSS: ``RTL_CSS`` flips ``.gradio-container`` with ``:has()`` on
+the signal's ``data-lang`` — the launch JavaScript (a
+``MutationObserver`` through the ``<gradio-app>`` shadow DOM setting
+``<html dir>``) is only a secondary belt-and-braces, after it proved
+unreliable in the user's real browser even though it was present in
+the served ``/config``. There is NO custom theme: the app uses
+Gradio's default theme, so the "Built with Gradio" footer and its
+light/dark settings gear stay visible (A-85/A-86).
 """
 from __future__ import annotations
-
-import gradio as gr
-from gradio.themes.base import Base as GradioThemeBase
 
 from tests.conftest import Phase1TestCase
 
@@ -21,32 +24,30 @@ def _find_fn(demo, api_name: str):
     return None
 
 
-class ThemeTestCase(Phase1TestCase):
-    def test_theme_is_soft_based_with_warm_white_and_petroleum(self):
-        from wedding_hall_system.ui.theme import BODY_BG, build_theme
-        theme = build_theme()
-        self.assertIsInstance(theme, GradioThemeBase)
-        css = theme._get_theme_css()
-        # Warm eye-comfortable white, never pure white, as the page
-        # background; petroleum as the primary-button fill.
-        self.assertEqual(BODY_BG, "#FAF8F2")
-        self.assertIn("--body-background-fill: #FAF8F2", css)
-        self.assertIn("#0F766E", css)
-        self.assertNotIn("--body-background-fill: #FFFFFF", css)
-        self.assertNotIn("--body-background-fill: #ffffff", css)
-
-    def test_css_has_subtle_dotted_background_and_hides_signal(self):
-        from wedding_hall_system.ui.theme import APP_CSS
-        self.assertIn("radial-gradient", APP_CSS)
-        self.assertIn("26px", APP_CSS)  # dot grid spacing
-        self.assertIn("#whms-dir-signal", APP_CSS)
-        self.assertIn("display: none", APP_CSS)
-        self.assertIn("#EAB308", APP_CSS)  # yellow accent rule
+class RtlCssTestCase(Phase1TestCase):
+    def test_rtl_css_is_only_the_two_direction_rules(self):
+        from wedding_hall_system.ui.rtl import RTL_CSS
+        # Exactly two rules: rtl for Arabic, ltr for English — and
+        # nothing else. In particular no colors, no background, no
+        # footer rule (the default theme + footer must survive, A-85).
+        self.assertIn('.gradio-container:has(#whms-dir-signal [data-lang="ar"])',
+                      RTL_CSS)
+        self.assertIn("direction: rtl", RTL_CSS)
+        self.assertIn('.gradio-container:has(#whms-dir-signal [data-lang="en"])',
+                      RTL_CSS)
+        self.assertIn("direction: ltr", RTL_CSS)
+        self.assertEqual(RTL_CSS.count("{"), 2)
+        self.assertEqual(RTL_CSS.count("}"), 2)
+        for banned in ("footer", "radial-gradient", "background",
+                       "display", "color", "#0F766E", "#EAB308",
+                       "#FAF8F2", "box-shadow"):
+            self.assertNotIn(banned, RTL_CSS)
 
     def test_js_flips_direction_through_shadow_dom(self):
-        from wedding_hall_system.ui.theme import RTL_JS
-        # Gradio renders inside <gradio-app>'s shadow DOM, so plain
-        # getElementById cannot see the signal component.
+        from wedding_hall_system.ui.rtl import RTL_JS
+        # Secondary mechanism only (A-86): Gradio renders inside
+        # <gradio-app>'s shadow DOM, so plain getElementById cannot
+        # see the signal component.
         self.assertIn("gradio-app", RTL_JS)
         self.assertIn("shadowRoot", RTL_JS)
         self.assertIn("whms-dir-signal", RTL_JS)
@@ -56,18 +57,20 @@ class ThemeTestCase(Phase1TestCase):
         self.assertIn('"ltr"', RTL_JS)
 
     def test_dir_signal_html(self):
-        from wedding_hall_system.ui.theme import dir_signal_html
+        from wedding_hall_system.ui.rtl import dir_signal_html
         self.assertIn('data-lang="ar"', dir_signal_html("ar"))
         self.assertIn('data-dir="rtl"', dir_signal_html("ar"))
         self.assertIn('data-lang="en"', dir_signal_html("en"))
         self.assertIn('data-dir="ltr"', dir_signal_html("en"))
 
-    def test_launch_kwargs_cover_theme_css_js(self):
-        from wedding_hall_system.ui.theme import APP_CSS, RTL_JS, launch_kwargs
+    def test_launch_kwargs_cover_css_and_js_only(self):
+        from wedding_hall_system.ui.rtl import RTL_CSS, RTL_JS, launch_kwargs
         kwargs = launch_kwargs()
-        self.assertEqual(set(kwargs), {"theme", "css", "js"})
-        self.assertIsInstance(kwargs["theme"], GradioThemeBase)
-        self.assertEqual(kwargs["css"], APP_CSS)
+        # No "theme" key: default Gradio theme, footer + light/dark
+        # settings gear intact (A-85).
+        self.assertEqual(set(kwargs), {"css", "js"})
+        self.assertNotIn("theme", kwargs)
+        self.assertEqual(kwargs["css"], RTL_CSS)
         self.assertEqual(kwargs["js"], RTL_JS)
 
 

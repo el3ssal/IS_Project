@@ -24,14 +24,16 @@ a fresh secret per process and a restart simply asks the user to log
 in again. The token's security does not depend on that secret — it is
 validated server-side.
 
-Post-Phase 8 polish adds the venue theme and live RTL
-(``ui/theme.py``): a hidden ``gr.HTML`` direction signal whose value
-is ``<span data-lang="ar|en">`` — every handler that can change the
-language (login, restore, toggle, logout) updates it — and the
-launch JavaScript reads it through the ``<gradio-app>`` shadow DOM
-and flips ``<html dir>`` live. Theme/css/js are Gradio 6 launch
-arguments (``__main__`` passes ``theme.launch_kwargs()``); they must
-not be passed to ``gr.Blocks(...)``.
+Post-Phase 8 polish adds live RTL (``ui/rtl.py``): a hidden ``gr.HTML``
+direction signal whose value is ``<span data-lang="ar|en">`` — every
+handler that can change the language (login, restore, toggle, logout)
+updates it — and the launch CSS flips the container direction with
+``:has()`` on the signal (``RTL_JS`` is a secondary belt-and-braces
+that flips ``<html dir>`` live). CSS/js are Gradio 6 launch arguments
+(``__main__`` passes ``rtl.launch_kwargs()``); they must not be passed
+to ``gr.Blocks(...)``. No custom theme: the app uses Gradio's default
+theme, so the "Built with Gradio" footer and its light/dark settings
+gear stay visible (A-85).
 """
 from __future__ import annotations
 
@@ -52,7 +54,7 @@ from ..ui.dashboard_views import build_dashboard_ui
 from ..ui.files_views import build_files_ui
 from ..ui.finance_views import build_finance_ui
 from ..ui.i18n import t
-from ..ui.theme import dir_signal_html
+from .rtl import dir_signal_html
 from ..ui.operations_views import build_operations_ui
 from ..ui.reports_views import build_reports_ui
 from ..ui.search_views import build_search_ui
@@ -84,7 +86,7 @@ def build_app(settings: AppSettings | None = None,
         remember_state = gr.BrowserState(
             None, storage_key="whms-remember-me",
             secret=os.environ.get("WEDDING_HALL_BROWSER_SECRET") or None)
-        # RTL direction signal (ui/theme.py): a hidden HTML component
+        # RTL direction signal (ui/rtl.py): a hidden HTML component
         # whose value is `<span data-lang="ar|en">`. RTL_JS reads it
         # through the <gradio-app> shadow DOM and flips the whole page
         # direction live; every handler that can change the language

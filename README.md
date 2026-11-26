@@ -162,16 +162,19 @@ Verified on this VM: loopback HTTP 200 in ~10 s, LAN mode HTTP 200 in
   booking dashboard, 8 reports with Gradio BarPlot charts and CSV
   export for every report, audit search screen, Arabic/English UI
   with RTL/LTR (Arabic default).
-- **Post-Phase 8 polish — Live RTL + venue theme:** the language
+- **Post-Phase 8 polish — Live RTL (theme reverted):** the language
   toggle now flips the WHOLE page direction (`dir="rtl"` for Arabic,
-  `dir="ltr"` for English) live via a hidden direction signal and a
-  `MutationObserver` (`wedding_hall_system/ui/theme.py`, A-82), and
-  the app wears a custom Gradio theme — warm eye-comfortable white
-  (never pure white), petroleum primary buttons, indigo secondary
-  accents, a thin yellow rule, subtle dotted paper background, system
-  fonts with Arabic coverage (offline-safe, A-83/A-84). Verified by
-  `tests/test_ui_rtl_theme.py` (8 tests) and a live server check
-  (served config carries the RTL script + dotted CSS; `gradio_client`
+  `dir="ltr"` for English) live via a hidden direction signal and
+  pure CSS (`:has()` on the signal, `wedding_hall_system/ui/rtl.py`,
+  A-82/A-86; the launch JavaScript `MutationObserver` is only a
+  secondary backup — the JS-only attempt did not flip direction in
+  a real browser). The custom venue theme from the first polish
+  attempt (Soft base, petroleum/indigo/yellow, dotted background)
+  was REVERTED at Ahmed's request (A-85): the app uses Gradio's
+  default theme, so the "Built with Gradio" footer and its
+  light/dark settings gear stay visible. Verified by
+  `tests/test_ui_rtl_theme.py` (7 tests) and a live server check
+  (served config carries the RTL CSS, no theme; `gradio_client`
   login/toggle flips the direction signal both ways).
 - **Phase 7 — Backup, deployment, final documentation:** Owner-only
   manual backup/restore with validation (see below), LAN deployment

@@ -908,3 +908,48 @@ Arabic in a Kufi style where installed, `Segoe UI`/`Tahoma` cover
 the rest. If a nicer display font is wanted later, bundle a
 `.woff2` locally and reference it via `head`/`css_paths` instead of
 a CDN.
+
+### A-85 — Revert the venue theme: back to Gradio default, footer + settings gear restored (2026-11-27)
+
+Ahmed reviewed the polished UI on his own device and rejected it:
+the new look was not nice, and the polish hid the "Built with
+Gradio" footer and the settings gear he used to switch light/dark
+mode. The whole theme is reverted: `ui/theme.py` is deleted
+(`build_theme`, `APP_CSS`, the Soft base, petroleum/indigo/yellow,
+dotted background, yellow top rule — all gone) and the app uses
+Gradio's default theme again, so the footer and the light/dark
+toggle come back. Lesson recorded in the `gradio-ui-rtl` skill:
+never hide the Gradio footer with CSS — it is not decoration, it
+carries the theme settings (light/dark) the user relies on. Any
+future visual polish must keep the footer visible.
+
+### A-86 — RTL via pure CSS `:has()` on the direction signal; JS demoted to secondary (2026-11-27)
+
+The screenshot proved the JS-only mechanism did not work: the new
+theme WAS running on Ahmed's device (teal buttons + yellow rule
+visible) but direction stayed LTR, even though the served `/config`
+contained `RTL_JS` and the toggle flipped the signal server-side.
+The CSS injection channel demonstrably works (the yellow rule
+rendered), so RTL now rides on CSS alone: `ui/rtl.py::RTL_CSS`
+(passed to `launch(css=...)`) is exactly two rules —
+
+```
+.gradio-container:has(#whms-dir-signal [data-lang="ar"]) { direction: rtl; }
+.gradio-container:has(#whms-dir-signal [data-lang="en"]) { direction: ltr; }
+```
+
+The hidden direction-signal component and every handler update to
+it (login, remember-me restore, language toggle, logout) are
+unchanged — that part was verified working. `RTL_JS` (the
+`MutationObserver` through the `<gradio-app>` shadow DOM setting
+`<html dir>`) stays only as a secondary belt-and-braces; the CSS
+must carry the fix on its own. `ui/theme.py` is replaced by the
+slim `ui/rtl.py` (signal HTML + the two-rule CSS + the JS, no theme
+code), and `launch_kwargs()` now returns only `{"css", "js"}` — no
+`theme` key. `tests/test_ui_rtl_theme.py` (7 tests) asserts the CSS
+is exactly those two rules (no colors, background, or footer
+rules) and the toggle flips the signal both ways. Verified by the
+full suite + a live server check (served config carries the RTL
+CSS, no theme). Remaining risk: the CSS flip is verified at
+mechanism level, not by a screenshot — Ahmed does the visual check
+on his device.
