@@ -16,7 +16,7 @@ implemented and verified, 16 of 16 non-functional requirements,
 25 of 25 business rules enforced; 22 of 22 SRS §21 tests implemented
 and verified; 12 of 12 deck requirements met.
 
-Solo project by Ahmed Ashraf Elassal, Faculty of Computers and
+Solo project by Ahmed Ashraf Elassal, Faculty of Computers and    
 Artificial Intelligence, Benha University. This is a fresh solo restart
 (2026-11-26): no team, no shared scaffold. Phase 0 deliverables are in
 `docs/` (traceability matrix, gap analysis, architecture review).
