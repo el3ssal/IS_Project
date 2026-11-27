@@ -909,6 +909,67 @@ the rest. If a nicer display font is wanted later, bundle a
 `.woff2` locally and reference it via `head`/`css_paths` instead of
 a CDN.
 
+### A-87 — Per-value `dir_wrap` for every dynamic Markdown value; container direction alone does not flip text blocks (2026-11-28)
+
+After A-86, Ahmed confirmed the flex layouts mirror in Arabic
+(tabs, buttons) but sent screenshots proving TEXT BLOCKS are still
+LTR in Arabic: the welcome header, the DB status text, the
+change-password heading, and the halls note. Mechanism check
+(served `/config` on a temp-DB server): the `whms-dir-signal`
+component IS registered with its `elem_id`, so the `:has()`
+selector can match — and Gradio 6.32 sets no `text-align: left` on
+markdown/prose, so Markdown should follow inherited `direction`.
+The container-direction mechanism nevertheless does not flip these
+text blocks in the user's real browser. Root cause: those Markdown
+values were never wrapped with the existing `dir_wrap(lang, ...)`
+helper (`ui/i18n.py`, wraps content in `<div dir="rtl|ltr">`) —
+it was used in dashboard/files/reports/search views but not in
+`app.py` or `catalog_views.py`.
+
+Fix (A-87): EVERY user-visible Markdown/text value must be wrapped
+with `dir_wrap` at its render site — welcome header, DB status
+text, change-password heading, halls heading, all table-list
+helpers (`_halls_md`, `_hours_md`, `_maint_md`, `_et_md`,
+`_pkg_md`, `_svc_md`, `_rule_md`, `_customers_md`,
+`_quotations_md`, `_bookings_md`, `_contracts_md`,
+`_templates_md`, `_task_templates_md`, `_task_rows_md`,
+`_staff_md`, `_notif_md`, finance list handlers), all message
+second-outputs, and the language toggle's Markdown "texts"
+(tracked via a `markdown_value_comps` set in `ui/app.py`, so
+Buttons sharing the `"value"` key are NOT wrapped). The `:has()`
+CSS and `RTL_JS` are untouched (secondary mechanisms for flex
+layouts); no theme/color/background/footer CSS. `do_view_contract`
+needed no change — the Arabic contract template already carries
+`<html lang="ar" dir="rtl">`. `auth_views.welcome_markdown` is
+dead code (no callers) and was left unwrapped deliberately.
+`gr.Info`/`gr.Error` popups and textbox/JSON outputs are out of
+scope (not Markdown). A re-audit with an AST script confirmed zero
+remaining unwrapped Markdown returns; the only unwrapped strings
+left are table-cell/field values embedded inside already-wrapped
+tables, non-Markdown utilities, and the dead `welcome_markdown`.
+
+Side find (fixed in the same pass): `_templates_md` crashed
+whenever any template existed — its list-comprehension loop
+variable `t` shadowed the translate function `t`, so
+`t(lang, 'ops.chars')` raised `TypeError: 'dict' object is not
+callable`. Renamed the loop variable to `tpl`; no strings changed.
+
+`tests/test_ui_rtl_theme.py` grew from 7 to 11 tests
+(`DirWrapRegressionTestCase`): toggle wraps welcome/status and
+both headings, 16 table-list handlers render `dir="rtl"` in
+Arabic and `dir="ltr"` in English, and the duplicate-customer
+message is wrapped. Verified 2026-11-27 ~22:00 EET: full unittest
+suite 362/362 green (358 baseline + 4 new), console tests 3/3,
+i18n parity intact (1,295 keys ar + en), and a live smoke check on
+a temp-DB server (port 7872, temp DB deleted afterwards):
+`/config` carries both `:has()` rules with theme `default`,
+`gradio_client` login returns welcome/status with `dir="rtl"`,
+toggle to English returns them with `dir="ltr"` (headings too),
+and the halls/customers tables render `dir="rtl"` in Arabic.
+Remaining risk: the per-value wrap is verified at mechanism level
+and via `gradio_client`, not by a screenshot — Ahmed does the
+final visual check on his device.
+
 ### A-85 — Revert the venue theme: back to Gradio default, footer + settings gear restored (2026-11-27)
 
 Ahmed reviewed the polished UI on his own device and rejected it:

@@ -35,7 +35,7 @@ from ..logic.refund_service import RefundService
 from ..utils.exceptions import ApplicationError
 from ..utils.logging_config import get_logger
 from ..utils.validators import egp_to_piasters
-from .i18n import LabelRegistry, lang_for_token, t
+from .i18n import LabelRegistry, dir_wrap, lang_for_token, t
 
 logger = get_logger(__name__)
 
@@ -96,11 +96,11 @@ EXP_ACT_KEYS = {
 
 def _md_table(headers: list[str], rows: list[list[str]], lang: str) -> str:
     if not rows:
-        return f"_{t(lang, 'common.no_records')}_"
+        return dir_wrap(lang, f"_{t(lang, 'common.no_records')}_")
     out = ["| " + " | ".join(headers) + " |",
            "| " + " | ".join("---" for _ in headers) + " |"]
     out += ["| " + " | ".join(str(c) for c in row) + " |" for row in rows]
-    return "\n".join(out)
+    return dir_wrap(lang, "\n".join(out))
 
 
 def _flag(lang: str, flag: str) -> str:
@@ -322,7 +322,7 @@ def build_finance_ui(db: DatabaseManager, auth: AuthService,
                            t(lang, "fin.table_amount"), t(lang, "fin.table_status"),
                            t(lang, "fin.table_reason")], refund_rows, lang),
             ]
-            return "\n\n".join(lines)
+            return dir_wrap(lang, "\n\n".join(lines))
 
         def do_correct(token, pid, ctype, reason):
             emp = employee(token)
@@ -337,10 +337,10 @@ def build_finance_ui(db: DatabaseManager, auth: AuthService,
             corr = t(lang, CORR_KEYS.get(ctype, "fin.corr_reversal"))
             gr.Info(t(lang, "fin.msg_payment_corrected").format(
                 number=payment.number, type=corr))
-            return t(lang, "fin.msg_payment_corrected_out").format(
+            return dir_wrap(lang, t(lang, "fin.msg_payment_corrected_out").format(
                 number=payment.number, type=corr,
                 amount=format_money(payment.amount),
-                status=t(lang, PAY_STATUS_KEYS.get(payment.status, "fin.pay_recorded")))
+                status=t(lang, PAY_STATUS_KEYS.get(payment.status, "fin.pay_recorded"))))
 
         def do_list_corr(token, pid):
             emp = employee(token)
@@ -351,11 +351,11 @@ def build_finance_ui(db: DatabaseManager, auth: AuthService,
                 rows = payments.list_corrections(emp, int(pid))
             except ApplicationError as exc:
                 raise gr.Error(str(exc))
-            return _md_table(
+            return dir_wrap(lang, _md_table(
                 [t(lang, "fin.table_id"), t(lang, "fin.table_type"),
                  t(lang, "fin.table_amount"), t(lang, "fin.table_reason")],
                 [[r["id"], t(lang, CORR_KEYS.get(r["correction_type"], "fin.corr_reversal")),
-                  format_money(r["amount"]), r["reason"]] for r in rows], lang)
+                  format_money(r["amount"]), r["reason"]] for r in rows], lang))
 
         def do_plan(token, bid, count):
             emp = employee(token)
@@ -369,13 +369,13 @@ def build_finance_ui(db: DatabaseManager, auth: AuthService,
             except ApplicationError as exc:
                 raise gr.Error(str(exc))
             gr.Info(t(lang, "fin.msg_plan_created").format(n=len(plan)))
-            return _md_table(
+            return dir_wrap(lang, _md_table(
                 [t(lang, "fin.table_seq"), t(lang, "fin.table_amount"),
                  t(lang, "fin.table_due"), t(lang, "fin.table_status")],
                 [[i.sequence, format_money(i.amount),
                   i.due_at.strftime("%Y-%m-%d") if i.due_at else "—",
                   t(lang, INST_STATUS_KEYS.get(i.status, "fin.inst_pending"))]
-                 for i in plan], lang)
+                 for i in plan], lang))
 
         def do_list_inst(token, bid):
             emp = employee(token)
@@ -386,7 +386,7 @@ def build_finance_ui(db: DatabaseManager, auth: AuthService,
                 rows = payments.list_installments(emp, int(bid))
             except ApplicationError as exc:
                 raise gr.Error(str(exc))
-            return _md_table(
+            return dir_wrap(lang, _md_table(
                 [t(lang, "fin.table_id"), t(lang, "fin.table_seq"),
                  t(lang, "fin.table_amount"), t(lang, "fin.table_due"),
                  t(lang, "fin.table_status"), t(lang, "fin.table_late_fee"),
@@ -396,7 +396,7 @@ def build_finance_ui(db: DatabaseManager, auth: AuthService,
                   t(lang, INST_STATUS_KEYS.get(i.status, "fin.inst_pending")),
                   format_money(i.late_fee_piasters) if i.late_fee_piasters else "—",
                   i.paid_payment_id or "—"] for i in rows], lang)
-
+)
         def do_pay_inst(token, iid, method, ref):
             emp = employee(token)
             lang = _lang(token)
@@ -408,9 +408,9 @@ def build_finance_ui(db: DatabaseManager, auth: AuthService,
             except ApplicationError as exc:
                 raise gr.Error(str(exc))
             gr.Info(t(lang, "fin.msg_inst_paid").format(number=payment.number))
-            return t(lang, "fin.msg_inst_paid_out").format(
+            return dir_wrap(lang, t(lang, "fin.msg_inst_paid_out").format(
                 id=iid, amount=format_money(payment.amount),
-                number=payment.number)
+                number=payment.number))
 
         def do_sweep(token):
             emp = employee(token)
@@ -419,7 +419,7 @@ def build_finance_ui(db: DatabaseManager, auth: AuthService,
                 result = payments.run_due_sweep(emp)
             except ApplicationError as exc:
                 raise gr.Error(str(exc))
-            return t(lang, "fin.msg_sweep").format(n=result["overdue_marked"])
+            return dir_wrap(lang, t(lang, "fin.msg_sweep").format(n=result["overdue_marked"]))
 
         def do_record_exp(token, amount, date, cat, desc, method, scope, scope_id):
             emp = employee(token)
@@ -434,12 +434,12 @@ def build_finance_ui(db: DatabaseManager, auth: AuthService,
             except ApplicationError as exc:
                 raise gr.Error(str(exc))
             gr.Info(t(lang, "fin.msg_expense_recorded").format(id=expense.id))
-            return t(lang, "fin.msg_expense_out").format(
+            return dir_wrap(lang, t(lang, "fin.msg_expense_out").format(
                 id=expense.id, amount=format_money(expense.amount),
                 cat=t(lang, CAT_KEYS.get(cat, "fin.cat_other")),
                 scope=t(lang, SCOPE_KEYS.get(scope, "fin.scope_venue")),
                 approval=t(lang, "fin.appr_pending"),
-                payment=t(lang, "fin.pay_pending"))
+                payment=t(lang, "fin.pay_pending")))
 
         def _expense_action(token, eid, action):
             emp = employee(token)
@@ -458,10 +458,10 @@ def build_finance_ui(db: DatabaseManager, auth: AuthService,
             gr.Info(t(lang, "fin.msg_expense_action").format(
                 id=expense.id,
                 action=t(lang, EXP_ACT_KEYS.get(action, "fin.act_approve"))))
-            return t(lang, "fin.msg_expense_action_out").format(
+            return dir_wrap(lang, t(lang, "fin.msg_expense_action_out").format(
                 id=expense.id,
                 approval=t(lang, APPR_KEYS.get(expense.approval_status, "fin.appr_pending")),
-                payment=t(lang, EXP_PAY_KEYS.get(expense.payment_status, "fin.pay_pending")))
+                payment=t(lang, EXP_PAY_KEYS.get(expense.payment_status, "fin.pay_pending"))))
 
         def do_list_exp(token):
             emp = employee(token)
@@ -470,7 +470,7 @@ def build_finance_ui(db: DatabaseManager, auth: AuthService,
                 rows = expenses.list_expenses(emp)
             except ApplicationError as exc:
                 raise gr.Error(str(exc))
-            return _md_table(
+            return dir_wrap(lang, _md_table(
                 [t(lang, "fin.table_id"), t(lang, "fin.table_date"),
                  t(lang, "fin.table_category"), t(lang, "fin.table_amount"),
                  t(lang, "fin.table_scope"), t(lang, "fin.table_approval"),
@@ -482,7 +482,7 @@ def build_finance_ui(db: DatabaseManager, auth: AuthService,
                    + (f"#{e.scope_id}" if e.scope_id else "")),
                   t(lang, APPR_KEYS.get(e.approval_status, "fin.appr_pending")),
                   t(lang, EXP_PAY_KEYS.get(e.payment_status, "fin.pay_pending"))]
-                 for e in rows], lang)
+                 for e in rows], lang))
 
         def do_request_ref(token, pid, amount, method, reason):
             emp = employee(token)
@@ -496,9 +496,9 @@ def build_finance_ui(db: DatabaseManager, auth: AuthService,
             except ApplicationError as exc:
                 raise gr.Error(str(exc))
             gr.Info(t(lang, "fin.msg_refund_requested").format(id=refund.id))
-            return t(lang, "fin.msg_refund_out").format(
+            return dir_wrap(lang, t(lang, "fin.msg_refund_out").format(
                 id=refund.id, amount=format_money(refund.amount),
-                status=t(lang, "fin.ref_pending_approval"))
+                status=t(lang, "fin.ref_pending_approval")))
 
         def _refund_action(token, rid, action):
             emp = employee(token)
@@ -519,7 +519,7 @@ def build_finance_ui(db: DatabaseManager, auth: AuthService,
                 raise gr.Error(str(exc))
             status = t(lang, REF_STATUS_KEYS.get(refund.status, "fin.ref_pending_approval"))
             gr.Info(t(lang, "fin.msg_refund_action").format(id=refund.id, status=status))
-            return t(lang, "fin.msg_refund_action_out").format(id=refund.id, status=status)
+            return dir_wrap(lang, t(lang, "fin.msg_refund_action_out").format(id=refund.id, status=status))
 
         def do_list_ref(token, bid):
             emp = employee(token)
@@ -530,13 +530,13 @@ def build_finance_ui(db: DatabaseManager, auth: AuthService,
                 rows = refunds.list_refunds(emp, booking_id=int(bid))
             except ApplicationError as exc:
                 raise gr.Error(str(exc))
-            return _md_table(
+            return dir_wrap(lang, _md_table(
                 [t(lang, "fin.table_id"), t(lang, "fin.table_payment"),
                  t(lang, "fin.table_amount"), t(lang, "fin.table_status"),
                  t(lang, "fin.table_reason")],
                 [[r.id, r.payment_id, format_money(r.amount),
                   t(lang, REF_STATUS_KEYS.get(r.status, "fin.ref_pending_approval")),
-                  r.reason] for r in rows], lang)
+                  r.reason] for r in rows], lang))
 
         def do_snapshot(token, bid):
             emp = employee(token)
@@ -547,9 +547,9 @@ def build_finance_ui(db: DatabaseManager, auth: AuthService,
                 policy = pricing.financial_policy_for_booking(int(bid), emp)
             except ApplicationError as exc:
                 raise gr.Error(str(exc))
-            return (f"### {t(lang, 'fin.snap_heading').format(id=int(bid))}\n\n"
+            return dir_wrap(lang, (f"### {t(lang, 'fin.snap_heading').format(id=int(bid))}\n\n"
                     f"```json\n{json.dumps(policy, indent=2, ensure_ascii=False)}\n```\n\n"
-                    f"_{t(lang, 'fin.snap_note')}_")
+                    f"_{t(lang, 'fin.snap_note')}_"))
 
         def do_recon(token):
             emp = employee(token)
@@ -593,7 +593,7 @@ def build_finance_ui(db: DatabaseManager, auth: AuthService,
                       ", ".join(_flag(lang, f) for f in r["flags"]) or "—"]
                      for r in result["bookings"]], lang),
             ]
-            return "\n\n".join(lines)
+            return dir_wrap(lang, "\n\n".join(lines))
 
         f_show_btn.click(do_show, inputs=[session_token, f_bid], outputs=[f_out])
         corr_btn.click(do_correct, inputs=[session_token, corr_pid, corr_type,

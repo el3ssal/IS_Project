@@ -123,6 +123,114 @@ class RtlToggleTestCase(Phase1TestCase):
         self.assertIn('data-lang="ar"', logged_out[-1])
 
 
+class DirWrapRegressionTestCase(Phase1TestCase):
+    """A-87: every dynamic Markdown value must carry its own dir=.
+
+    Container ``direction`` alone does not flip Markdown text blocks
+    in the user's real browser, so each rendered value is wrapped
+    with ``dir_wrap`` (``<div dir="rtl">`` for Arabic, ``<div
+    dir="ltr">`` for English). These tests pin the wrapped outputs
+    for the welcome/status lines, the headings, and every table list.
+    """
+
+    def _demo_and_token(self):
+        from wedding_hall_system.ui.app import build_app
+        demo = build_app(self.settings, self.db)
+        _, token = self.auth.login("owner", "Owner123!")
+        return demo, token
+
+    def _fn(self, demo, api_name):
+        fn = _find_fn(demo, api_name)
+        self.assertIsNotNone(fn, f"missing handler {api_name}")
+        return fn
+
+    def test_language_toggle_wraps_welcome_and_status(self):
+        demo, token = self._demo_and_token()
+        lang_fn = self._fn(demo, "do_language")
+        # do_language outputs: [lang, welcome, status, ...]
+        ar = lang_fn("ar", token)
+        self.assertIn('dir="rtl"', ar[1])
+        self.assertIn('dir="rtl"', ar[2])
+        en = lang_fn("en", token)
+        self.assertIn('dir="ltr"', en[1])
+        self.assertIn('dir="ltr"', en[2])
+
+    def _toggle_value(self, outputs, needle):
+        hits = [o["value"] for o in outputs
+                if isinstance(o, dict) and isinstance(o.get("value"), str)
+                and needle in o["value"]]
+        self.assertEqual(len(hits), 1,
+                         f"expected one toggle update containing {needle!r}")
+        return hits[0]
+
+    def test_language_toggle_wraps_headings(self):
+        from wedding_hall_system.ui.i18n import t
+        demo, token = self._demo_and_token()
+        lang_fn = self._fn(demo, "do_language")
+        ar = lang_fn("ar", token)
+        cp = self._toggle_value(ar, t("ar", "login.change_password_heading"))
+        self.assertIn('dir="rtl"', cp)
+        halls = self._toggle_value(ar, t("ar", "catalog.halls_heading"))
+        self.assertIn('dir="rtl"', halls)
+        en = lang_fn("en", token)
+        cp_en = self._toggle_value(
+            en, t("en", "login.change_password_heading"))
+        self.assertIn('dir="ltr"', cp_en)
+        halls_en = self._toggle_value(en, t("en", "catalog.halls_heading"))
+        self.assertIn('dir="ltr"', halls_en)
+
+    def test_table_lists_wrapped_both_languages(self):
+        demo, token = self._demo_and_token()
+        lang_fn = self._fn(demo, "do_language")
+        lang_fn("ar", token)
+        single = [
+            ("do_refresh_halls", (token,)),
+            ("do_refresh_hours", (token,)),
+            ("do_refresh_maint", (token,)),
+            ("do_refresh_et", (token,)),
+            ("do_refresh_pkg", (token,)),
+            ("do_refresh_svc", (token,)),
+            ("do_refresh_rule", (token,)),
+            ("do_refresh_quot", (token,)),
+            ("do_refresh_books", (token,)),
+            ("do_list_exp", (token,)),
+            ("do_refresh_contracts", (token,)),
+            ("do_refresh_templates", (token,)),
+            ("do_refresh_task_templates", (token,)),
+            ("do_refresh_staff", (token,)),
+        ]
+        for name, args in single:
+            out = self._fn(demo, name)(*args)
+            text = out[0] if isinstance(out, (list, tuple)) else out
+            self.assertIsInstance(text, str, name)
+            self.assertIn('dir="rtl"', text, name)
+        cust = self._fn(demo, "do_refresh_cust")(token, "")
+        self.assertIn('dir="rtl"', cust)
+        notif = self._fn(demo, "do_refresh_notif")(token, False)
+        text = notif[0] if isinstance(notif, (list, tuple)) else notif
+        self.assertIn('dir="rtl"', text)
+        # English: the same handlers must render ltr.
+        lang_fn("en", token)
+        for name, args in single:
+            out = self._fn(demo, name)(*args)
+            text = out[0] if isinstance(out, (list, tuple)) else out
+            self.assertIn('dir="ltr"', text, name)
+        self.assertIn('dir="ltr"',
+                      self._fn(demo, "do_refresh_cust")(token, ""))
+
+    def test_duplicate_customer_message_wrapped(self):
+        # The duplicate-customer message is a plain translated string
+        # rendered into a Markdown output, so it needs dir_wrap too.
+        demo, token = self._demo_and_token()
+        create = self._fn(demo, "do_create_cust")
+        args = (token, "Test RTL", "01000000001", "", "", "", "", False)
+        first = create(*args)
+        self.assertEqual(first[1], "")
+        dup = create(*args)
+        self.assertIn('dir="rtl"', dup[0])
+        self.assertIn('dir="rtl"', dup[1])
+
+
 if __name__ == "__main__":
     import unittest
     unittest.main()

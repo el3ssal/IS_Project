@@ -20,14 +20,14 @@ from ..logic.report_service import ReportService
 from ..logic.settings_service import SETTING_SPECS, SettingsService
 from ..utils.exceptions import ApplicationError
 from ..utils.logging_config import get_logger
-from .i18n import LabelRegistry, lang_for_token, t
+from .i18n import LabelRegistry, dir_wrap, lang_for_token, t
 
 logger = get_logger(__name__)
 
 
 def _settings_md(rows: list[dict], lang: str) -> str:
     if not rows:
-        return f"_{t(lang, 'set.msg_no_settings')}_"
+        return dir_wrap(lang, f"_{t(lang, 'set.msg_no_settings')}_")
     out = [f"| {t(lang, 'set.table_setting')} | {t(lang, 'set.table_group')} | "
            f"{t(lang, 'set.table_value')} |", "| --- | --- | --- |"]
     current_group = None
@@ -49,7 +49,7 @@ def _settings_md(rows: list[dict], lang: str) -> str:
         if len(display) > 80:
             display = display[:77] + "…"
         out.append(f"| {label} (`{r['key']}`) | {group} | `{display}` |")
-    return "\n".join(out)
+    return dir_wrap(lang, "\n".join(out))
 
 
 def build_settings_ui(db: DatabaseManager, auth: AuthService,
@@ -119,8 +119,8 @@ def build_settings_ui(db: DatabaseManager, auth: AuthService,
             except ApplicationError as exc:
                 raise gr.Error(str(exc))
             gr.Info(t(lang, "set.msg_saved").format(key=key))
-            return (t(lang, "set.msg_saved_out").format(
-                        key=key, value=updated["value"]),
+            return (dir_wrap(lang, t(lang, "set.msg_saved_out").format(
+                        key=key, value=updated["value"])),
                     _settings_md(svc.list_settings(emp), lang))
 
         def do_notif_load(token):
@@ -143,7 +143,7 @@ def build_settings_ui(db: DatabaseManager, auth: AuthService,
             except ApplicationError as exc:
                 raise gr.Error(str(exc))
             gr.Info(t(lang, "set.msg_notif_saved"))
-            return t(lang, "set.msg_notif_saved")
+            return dir_wrap(lang, t(lang, "set.msg_notif_saved"))
 
         def do_widgets_load(token):
             emp = employee(token)
@@ -165,7 +165,7 @@ def build_settings_ui(db: DatabaseManager, auth: AuthService,
             except ApplicationError as exc:
                 raise gr.Error(str(exc))
             gr.Info(t(lang, "set.msg_widgets_saved"))
-            return t(lang, "set.msg_widgets_saved")
+            return dir_wrap(lang, t(lang, "set.msg_widgets_saved"))
 
         list_btn.click(do_list, inputs=[session_token], outputs=[settings_md])
         set_btn.click(do_save, inputs=[session_token, set_key, set_value],

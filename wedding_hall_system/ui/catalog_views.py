@@ -30,7 +30,7 @@ from ..logic.pricing_service import PricingService
 from ..utils.exceptions import ApplicationError
 from ..utils.logging_config import get_logger
 from ..utils.validators import egp_to_piasters, parse_iso_datetime
-from .i18n import LabelRegistry, lang_for_token, t, translate_price_label
+from .i18n import LabelRegistry, dir_wrap, lang_for_token, t, translate_price_label
 
 logger = get_logger(__name__)
 
@@ -56,11 +56,11 @@ ADJ_KEYS = {"percent": "catalog.adj_percent", "fixed": "catalog.adj_fixed"}
 
 def _md_table(headers: list[str], rows: list[list[str]], lang: str) -> str:
     if not rows:
-        return f"_{t(lang, 'common.no_records')}_"
+        return dir_wrap(lang, f"_{t(lang, 'common.no_records')}_")
     out = ["| " + " | ".join(headers) + " |",
            "| " + " | ".join("---" for _ in headers) + " |"]
     out += ["| " + " | ".join(str(c) for c in row) + " |" for row in rows]
-    return "\n".join(out)
+    return dir_wrap(lang, "\n".join(out))
 
 
 def _yes_no(lang: str, value: bool) -> str:
@@ -134,13 +134,13 @@ def build_catalog_ui(db: DatabaseManager, auth: AuthService,
                              t(lang, STATUS_KEYS.get(h.status, "catalog.status_active")),
                              _yes_no(lang, h.is_active),
                              ", ".join(h.facilities)])
-            return _md_table(
+            return dir_wrap(lang, _md_table(
                 [t(lang, "catalog.table_id"), t(lang, "catalog.table_name"),
                  t(lang, "catalog.table_capacity"),
                  t(lang, "catalog.table_base_price"),
                  t(lang, "catalog.table_status"),
                  t(lang, "catalog.table_active"),
-                 t(lang, "catalog.table_facilities")], rows, lang)
+                 t(lang, "catalog.table_facilities")], rows, lang))
 
         def do_refresh_halls(token):
             employee(token)
@@ -238,7 +238,7 @@ def build_catalog_ui(db: DatabaseManager, auth: AuthService,
                     [t(lang, "catalog.table_id"), t(lang, "catalog.table_date"),
                      t(lang, "catalog.table_hours"),
                      t(lang, "catalog.table_reason")], srows, lang))
-            return "\n\n".join(lines)
+            return dir_wrap(lang, "\n\n".join(lines))
 
         def do_refresh_hours(token):
             employee(token)
@@ -318,11 +318,11 @@ def build_catalog_ui(db: DatabaseManager, auth: AuthService,
                 rows.append([m.id, hall.name if hall else m.hall_id, m.type,
                              m.start_at.strftime("%Y-%m-%d %H:%M"),
                              m.end_at.strftime("%Y-%m-%d %H:%M"), m.description])
-            return _md_table(
+            return dir_wrap(lang, _md_table(
                 [t(lang, "catalog.table_id"), t(lang, "catalog.table_hall"),
                  t(lang, "catalog.table_type"), t(lang, "catalog.table_start"),
                  t(lang, "catalog.table_end"),
-                 t(lang, "catalog.table_description")], rows, lang)
+                 t(lang, "catalog.table_description")], rows, lang))
 
         def do_refresh_maint(token):
             employee(token)
@@ -376,10 +376,10 @@ def build_catalog_ui(db: DatabaseManager, auth: AuthService,
             rows = [[t.id, t.name, t.default_duration_min,
                      _yes_no(lang, t.is_active)]
                     for t in halls.list_event_types(_system_employee())]
-            return _md_table(
+            return dir_wrap(lang, _md_table(
                 [t(lang, "catalog.table_id"), t(lang, "catalog.table_name"),
                  t(lang, "catalog.table_duration"),
-                 t(lang, "catalog.table_active")], rows, lang)
+                 t(lang, "catalog.table_active")], rows, lang))
 
         def do_refresh_et(token):
             employee(token)
@@ -440,13 +440,13 @@ def build_catalog_ui(db: DatabaseManager, auth: AuthService,
                              f"{t(lang, 'catalog.min_unit')}",
                              p.included_guests, format_money(p.extra_guest_price),
                              _yes_no(lang, p.is_active)])
-            return _md_table(
+            return dir_wrap(lang, _md_table(
                 [t(lang, "catalog.table_id"), t(lang, "catalog.table_name"),
                  t(lang, "catalog.table_base_price"),
                  t(lang, "catalog.table_duration_range"),
                  t(lang, "catalog.table_guests"),
                  t(lang, "catalog.table_extra"),
-                 t(lang, "catalog.table_active")], rows, lang)
+                 t(lang, "catalog.table_active")], rows, lang))
 
         def do_refresh_pkg(token):
             employee(token)
@@ -509,11 +509,11 @@ def build_catalog_ui(db: DatabaseManager, auth: AuthService,
                      t(lang, METHOD_KEYS.get(s.pricing_method, "catalog.method_per_event")),
                      format_money(s.unit_price), _yes_no(lang, s.is_active)]
                     for s in catalog.list_services(_system_employee())]
-            return _md_table(
+            return dir_wrap(lang, _md_table(
                 [t(lang, "catalog.table_id"), t(lang, "catalog.table_name"),
                  t(lang, "catalog.table_method"),
                  t(lang, "catalog.table_unit_price"),
-                 t(lang, "catalog.table_active")], rows, lang)
+                 t(lang, "catalog.table_active")], rows, lang))
 
         def do_refresh_svc(token):
             employee(token)
@@ -589,13 +589,13 @@ def build_catalog_ui(db: DatabaseManager, auth: AuthService,
                              t(lang, ADJ_KEYS.get(r.adjustment_type, "catalog.adj_percent")),
                              f"{r.adjustment_value:+d}",
                              _yes_no(lang, r.is_active)])
-            return _md_table(
+            return dir_wrap(lang, _md_table(
                 [t(lang, "catalog.table_id"), t(lang, "catalog.table_name"),
                  t(lang, "catalog.table_hall"), t(lang, "catalog.table_package"),
                  t(lang, "catalog.table_event_type"),
                  t(lang, "catalog.table_weekday"), t(lang, "catalog.table_season"),
                  t(lang, "catalog.table_type"), t(lang, "catalog.table_value"),
-                 t(lang, "catalog.table_active")], rows, lang)
+                 t(lang, "catalog.table_active")], rows, lang))
 
         def do_refresh_rule(token):
             employee(token)
@@ -699,7 +699,7 @@ def build_catalog_ui(db: DatabaseManager, auth: AuthService,
             lines.append(f"| **{t(lang, 'catalog.table_total')}** | **{format_money(breakdown.total)}** |")
             avail_md = (t(lang, "catalog.msg_avail_yes")
                         if avail else t(lang, "catalog.msg_avail_no").format(reason=avail.reason))
-            return "\n".join(lines), avail_md
+            return dir_wrap(lang, "\n".join(lines)), dir_wrap(lang, avail_md)
 
         calc_btn.click(do_calculate, inputs=[session_token, calc_hall, calc_pkg,
                        calc_type, calc_date, calc_start, calc_end, calc_guests,

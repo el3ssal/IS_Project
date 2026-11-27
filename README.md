@@ -173,9 +173,16 @@ Verified on this VM: loopback HTTP 200 in ~10 s, LAN mode HTTP 200 in
   was REVERTED at Ahmed's request (A-85): the app uses Gradio's
   default theme, so the "Built with Gradio" footer and its
   light/dark settings gear stay visible. Verified by
-  `tests/test_ui_rtl_theme.py` (7 tests) and a live server check
+  `tests/test_ui_rtl_theme.py` (11 tests) and a live server check
   (served config carries the RTL CSS, no theme; `gradio_client`
   login/toggle flips the direction signal both ways).
+- **A-87 — Per-value `dir_wrap` for Markdown text blocks:**
+  container `direction` alone did not flip Markdown text blocks
+  (welcome header, DB status, headings, table lists) in the user's
+  real browser, so every dynamic Markdown value is now wrapped
+  with `dir_wrap(lang, ...)` (`<div dir="rtl|ltr">`,
+  `wedding_hall_system/ui/i18n.py`; see A-87 in
+  `docs/ASSUMPTIONS_AND_DECISIONS.md`).
 - **Phase 7 — Backup, deployment, final documentation:** Owner-only
   manual backup/restore with validation (see below), LAN deployment
   config, performance checks (`docs/PERFORMANCE.md`), final UML + DFD

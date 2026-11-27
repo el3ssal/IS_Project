@@ -22,7 +22,7 @@ from ..logic.auth_service import AuthService
 from ..logic.calendar_service import RANGE_PRESETS, CalendarService
 from ..utils.exceptions import ApplicationError
 from ..utils.logging_config import get_logger
-from .i18n import LabelRegistry, lang_for_token, t
+from .i18n import LabelRegistry, dir_wrap, lang_for_token, t
 
 logger = get_logger(__name__)
 
@@ -45,7 +45,7 @@ KIND_KEYS = {
 
 def _events_md(events: list[dict], lang: str) -> str:
     if not events:
-        return f"_{t(lang, 'cal.msg_no_events')}_"
+        return dir_wrap(lang, f"_{t(lang, 'cal.msg_no_events')}_")
     out = [f"| {t(lang, 'cal.table_kind')} | {t(lang, 'cal.table_event')} | "
            f"{t(lang, 'cal.table_hall')} | {t(lang, 'cal.table_start')} | "
            f"{t(lang, 'cal.table_end')} | {t(lang, 'cal.table_status')} |",
@@ -64,7 +64,7 @@ def _events_md(events: list[dict], lang: str) -> str:
             f"| {t(lang, KIND_KEYS.get(e['kind'], 'cal.kind_booking'))} | "
             f"{e['title']} | {e['hall']} | "
             f"{str(e['start'])[:16]} | {str(e['end'])[:16]} | {status} |")
-    return "\n".join(out)
+    return dir_wrap(lang, "\n".join(out))
 
 
 def _detail_md(detail: dict, lang: str) -> str:
@@ -72,7 +72,7 @@ def _detail_md(detail: dict, lang: str) -> str:
         if value is None:
             return t(lang, "cal.no_permission")
         return f"{value // 100:,}.{value % 100:02d} EGP"
-    return (
+    return dir_wrap(lang, (
         f"**{t(lang, 'cal.table_booking')} {detail['number']}** — "
         f"{t(lang, BOOKING_STATUS_KEYS.get(detail['status'], 'booking.status_pending'))}  \n"
         f"{t(lang, 'cal.detail_customer')}: {detail['customer']}  \n"
@@ -84,7 +84,7 @@ def _detail_md(detail: dict, lang: str) -> str:
         f"{t(lang, 'cal.detail_total')}: {money(detail['total'])}  \n"
         f"{t(lang, 'cal.detail_paid')}: {money(detail['paid'])} | "
         f"{t(lang, 'cal.detail_outstanding')}: {money(detail['outstanding'])}"
-    )
+    ))
 
 
 def build_calendar_ui(db: DatabaseManager, auth: AuthService,
@@ -189,9 +189,9 @@ def build_calendar_ui(db: DatabaseManager, auth: AuthService,
             except ValueError:
                 raise gr.Error(t(lang, "cal.msg_bad_datetime"))
             gr.Info(t(lang, "cal.msg_rescheduled").format(number=booking.number))
-            return t(lang, "cal.msg_rescheduled_out").format(
+            return dir_wrap(lang, t(lang, "cal.msg_rescheduled_out").format(
                 number=booking.number, start=booking.start_at,
-                end=booking.end_at)
+                end=booking.end_at))
 
         cal_btn.click(do_show,
                       inputs=[session_token, cal_date, cal_range, cal_hall],

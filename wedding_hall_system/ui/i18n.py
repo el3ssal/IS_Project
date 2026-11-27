@@ -2848,7 +2848,7 @@ class LabelRegistry:
     def markdown(self, key: str, **kw):
         import gradio as gr
 
-        return self._add(gr.Markdown(t("ar", key), **kw), key, "texts")
+        return self._add(gr.Markdown(dir_wrap("ar", t("ar", key)), **kw), key, "texts")
 
     def tab(self, key: str):
         """Context manager: ``with reg.tab("tab.halls"): ...``"""

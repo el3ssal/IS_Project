@@ -29,7 +29,7 @@ from ..logic.quotation_service import QuotationService
 from ..utils.exceptions import ApplicationError
 from ..utils.logging_config import get_logger
 from ..utils.validators import egp_to_piasters, parse_iso_datetime
-from .i18n import LabelRegistry, format_advisory_reason, lang_for_token, t, translate_price_label
+from .i18n import LabelRegistry, dir_wrap, format_advisory_reason, lang_for_token, t, translate_price_label
 
 logger = get_logger(__name__)
 
@@ -66,11 +66,11 @@ DUP_MATCH_KEYS = {
 
 def _md_table(headers: list[str], rows: list[list[str]], lang: str) -> str:
     if not rows:
-        return f"_{t(lang, 'common.no_records')}_"
+        return dir_wrap(lang, f"_{t(lang, 'common.no_records')}_")
     out = ["| " + " | ".join(headers) + " |",
            "| " + " | ".join("---" for _ in headers) + " |"]
     out += ["| " + " | ".join(str(c) for c in row) + " |" for row in rows]
-    return "\n".join(out)
+    return dir_wrap(lang, "\n".join(out))
 
 
 def _hold_countdown(booking, lang: str) -> str:
@@ -171,10 +171,10 @@ def build_booking_ui(db: DatabaseManager, auth: AuthService,
             rows = []
             for c in customers.list_customers(emp, search=search or ""):
                 rows.append([c.id, c.full_name, c.phone, c.email, c.national_id])
-            return _md_table(
+            return dir_wrap(lang, _md_table(
                 [t(lang, "booking.table_id"), t(lang, "booking.table_name"),
                  t(lang, "booking.table_phone"), t(lang, "booking.table_email"),
-                 t(lang, "booking.table_national")], rows, lang)
+                 t(lang, "booking.table_national")], rows, lang))
 
         def do_refresh_cust(token, search):
             emp = employee(token)
@@ -197,7 +197,7 @@ def build_booking_ui(db: DatabaseManager, auth: AuthService,
                         lines.append(t(lang, "booking.msg_dup_line").format(
                             name=d["full_name"], match=match))
                     lines.append(t(lang, "booking.msg_dup_hint"))
-                    return _customers_md(emp, lang), "\n".join(lines)
+                    return _customers_md(emp, lang), dir_wrap(lang, "\n".join(lines))
                 raise gr.Error(str(exc))
             gr.Info(t(lang, "booking.msg_customer_created").format(
                 name=created.full_name, id=created.id))
@@ -238,7 +238,7 @@ def build_booking_ui(db: DatabaseManager, auth: AuthService,
                     [[t(lang, INTER_TYPE_KEYS.get(i.type, "booking.inter_note")), i.summary]
                      for i in prof["interactions"]], lang),
             ]
-            return "\n\n".join(lines)
+            return dir_wrap(lang, "\n\n".join(lines))
 
         def do_add_interaction(token, cid, itype, summary):
             emp = employee(token)
@@ -298,12 +298,12 @@ def build_booking_ui(db: DatabaseManager, auth: AuthService,
                              q.start_at.strftime("%Y-%m-%d %H:%M") if q.start_at else "",
                              q.guest_count, format_money(q.total_amount),
                              _status(lang, q.status)])
-            return _md_table(
+            return dir_wrap(lang, _md_table(
                 [t(lang, "booking.table_id"), t(lang, "booking.table_number"),
                  t(lang, "booking.table_customer"), t(lang, "booking.table_hall"),
                  t(lang, "booking.table_event"), t(lang, "booking.table_guests"),
                  t(lang, "booking.table_total"), t(lang, "booking.table_status")],
-                rows, lang)
+                rows, lang))
 
         def do_refresh_quot(token):
             emp = employee(token)
@@ -335,7 +335,7 @@ def build_booking_ui(db: DatabaseManager, auth: AuthService,
                 lines.append(f"| {translate_price_label(lang, item.label)} | {format_money(item.amount)} |")
             lines.append(f"| **{t(lang, 'booking.table_total')}** | **{format_money(quote.total_amount)}** |")
             gr.Info(t(lang, "booking.msg_quot_created_info").format(number=quote.number))
-            return _quotations_md(emp, lang), "\n".join(lines)
+            return _quotations_md(emp, lang), dir_wrap(lang, "\n".join(lines))
 
         def _quot_action(token, qid, action):
             emp = employee(token)
@@ -349,11 +349,11 @@ def build_booking_ui(db: DatabaseManager, auth: AuthService,
                 if action == "send":
                     quote = quotations.send_quotation(emp, int(qid))
                     gr.Info(t(lang, "booking.msg_quot_sent").format(number=quote.number))
-                    return _quotations_md(emp, lang), t(lang, "booking.msg_quot_sent_out").format(number=quote.number)
+                    return _quotations_md(emp, lang), dir_wrap(lang, t(lang, "booking.msg_quot_sent_out").format(number=quote.number))
                 if action == "accept":
                     quote = quotations.accept_quotation(emp, int(qid))
                     gr.Info(t(lang, "booking.msg_quot_accepted").format(number=quote.number))
-                    return _quotations_md(emp, lang), t(lang, "booking.msg_quot_accepted_out").format(number=quote.number)
+                    return _quotations_md(emp, lang), dir_wrap(lang, t(lang, "booking.msg_quot_accepted_out").format(number=quote.number))
                 # convert: accept first (if not already), then convert.
                 if quote.status in ("draft", "sent"):
                     quote = quotations.accept_quotation(emp, int(qid))
@@ -363,10 +363,10 @@ def build_booking_ui(db: DatabaseManager, auth: AuthService,
                     start_at=quote.start_at, end_at=quote.end_at,
                     guests=quote.guest_count, quotation_id=quote.id)
                 gr.Info(t(lang, "booking.msg_booking_created").format(number=booking.number))
-                return _quotations_md(emp, lang), t(lang, "booking.msg_convert_out").format(
+                return _quotations_md(emp, lang), dir_wrap(lang, t(lang, "booking.msg_convert_out").format(
                     number=booking.number,
                     hold=booking.hold_expires_at.strftime("%Y-%m-%d %H:%M") if booking.hold_expires_at else "—",
-                    deposit=format_money(booking.deposit_required))
+                    deposit=format_money(booking.deposit_required)))
             except ApplicationError as exc:
                 raise gr.Error(str(exc))
 
@@ -480,12 +480,12 @@ def build_booking_ui(db: DatabaseManager, auth: AuthService,
                              b.start_at.strftime("%Y-%m-%d %H:%M") if b.start_at else "",
                              _status(lang, b.status), format_money(b.total_amount),
                              format_money(b.deposit_paid), _hold_countdown(b, lang)])
-            return _md_table(
+            return dir_wrap(lang, _md_table(
                 [t(lang, "booking.table_id"), t(lang, "booking.table_number"),
                  t(lang, "booking.table_customer"), t(lang, "booking.table_hall"),
                  t(lang, "booking.table_event"), t(lang, "booking.table_status"),
                  t(lang, "booking.table_total"), t(lang, "booking.table_deposit"),
-                 t(lang, "booking.table_hold")], rows, lang)
+                 t(lang, "booking.table_hold")], rows, lang))
 
         def do_refresh_books(token):
             emp = employee(token)
@@ -508,10 +508,10 @@ def build_booking_ui(db: DatabaseManager, auth: AuthService,
             except ApplicationError as exc:
                 raise gr.Error(str(exc))
             gr.Info(t(lang, "booking.msg_booking_created").format(number=booking.number))
-            return _bookings_md(emp, lang), t(lang, "booking.msg_book_created_out").format(
+            return _bookings_md(emp, lang), dir_wrap(lang, t(lang, "booking.msg_book_created_out").format(
                 number=booking.number, total=format_money(booking.total_amount),
                 deposit=format_money(booking.deposit_required),
-                hold=booking.hold_expires_at.strftime("%Y-%m-%d %H:%M") if booking.hold_expires_at else "—")
+                hold=booking.hold_expires_at.strftime("%Y-%m-%d %H:%M") if booking.hold_expires_at else "—"))
 
         def do_detail(token, bid):
             emp = employee(token)
@@ -565,7 +565,7 @@ def build_booking_ui(db: DatabaseManager, auth: AuthService,
                     [[c["created_at"], c["employee_id"] or "—", c["reason"] or "—",
                       format_money(c["old_total"]), format_money(c["new_total"]),
                       format_money(c["delta"])] for c in changes], lang))
-            return "\n\n".join(lines)
+            return dir_wrap(lang, "\n\n".join(lines))
 
         def do_pay(token, bid, amount, method, ref, initiated):
             emp = employee(token)
@@ -585,10 +585,10 @@ def build_booking_ui(db: DatabaseManager, auth: AuthService,
             status = booking.status if booking else "?"
             gr.Info(t(lang, "booking.msg_payment_recorded").format(
                 number=payment.number, status=_status(lang, status)))
-            return _bookings_md(emp, lang), t(lang, "booking.msg_pay_out").format(
+            return _bookings_md(emp, lang), dir_wrap(lang, t(lang, "booking.msg_pay_out").format(
                 number=payment.number, amount=format_money(payment.amount),
                 method=t(lang, PAY_METHOD_KEYS.get(method, "booking.method_other")),
-                status=_status(lang, status))
+                status=_status(lang, status)))
 
         def do_notes(token, bid, notes):
             emp = employee(token)
@@ -600,7 +600,7 @@ def build_booking_ui(db: DatabaseManager, auth: AuthService,
             except ApplicationError as exc:
                 raise gr.Error(str(exc))
             gr.Info(t(lang, "booking.msg_notes_updated"))
-            return _bookings_md(emp, lang), t(lang, "booking.msg_notes_out")
+            return _bookings_md(emp, lang), dir_wrap(lang, t(lang, "booking.msg_notes_out"))
 
         def do_cancel(token, bid, reason):
             emp = employee(token)
@@ -612,7 +612,7 @@ def build_booking_ui(db: DatabaseManager, auth: AuthService,
             except ApplicationError as exc:
                 raise gr.Error(str(exc))
             gr.Info(t(lang, "booking.msg_booking_cancelled").format(number=booking.number))
-            return _bookings_md(emp, lang), t(lang, "booking.msg_cancel_out").format(number=booking.number)
+            return _bookings_md(emp, lang), dir_wrap(lang, t(lang, "booking.msg_cancel_out").format(number=booking.number))
 
         def do_reschedule(token, bid, date, start, end, hall, reason):
             emp = employee(token)
@@ -628,10 +628,10 @@ def build_booking_ui(db: DatabaseManager, auth: AuthService,
             except ApplicationError as exc:
                 raise gr.Error(str(exc))
             gr.Info(t(lang, "booking.msg_rescheduled").format(number=booking.number))
-            return _bookings_md(emp, lang), t(lang, "booking.msg_reschedule_out").format(
+            return _bookings_md(emp, lang), dir_wrap(lang, t(lang, "booking.msg_reschedule_out").format(
                 number=booking.number,
                 when=booking.start_at.strftime("%Y-%m-%d %H:%M") if booking.start_at else "—",
-                total=format_money(booking.total_amount))
+                total=format_money(booking.total_amount)))
 
         def do_transfer(token, bid, new_cid, reason):
             emp = employee(token)
@@ -647,8 +647,8 @@ def build_booking_ui(db: DatabaseManager, auth: AuthService,
             except ApplicationError as exc:
                 raise gr.Error(str(exc))
             gr.Info(t(lang, "booking.msg_transferred").format(number=booking.number))
-            return _bookings_md(emp, lang), t(lang, "booking.msg_transfer_out").format(
-                number=booking.number, customer=booking.customer_id)
+            return _bookings_md(emp, lang), dir_wrap(lang, t(lang, "booking.msg_transfer_out").format(
+                number=booking.number, customer=booking.customer_id))
 
         def _lifecycle(token, bid, action):
             emp = employee(token)
@@ -666,8 +666,8 @@ def build_booking_ui(db: DatabaseManager, auth: AuthService,
                 raise gr.Error(str(exc))
             gr.Info(t(lang, "booking.msg_lifecycle").format(
                 number=booking.number, status=_status(lang, booking.status)))
-            return _bookings_md(emp, lang), t(lang, "booking.msg_lifecycle_out").format(
-                number=booking.number, status=_status(lang, booking.status))
+            return _bookings_md(emp, lang), dir_wrap(lang, t(lang, "booking.msg_lifecycle_out").format(
+                number=booking.number, status=_status(lang, booking.status)))
 
         def do_load_current(token, bid):
             emp = employee(token)
@@ -711,7 +711,7 @@ def build_booking_ui(db: DatabaseManager, auth: AuthService,
                     amount=format_money(-result["delta"])))
             if result["contract_action"] == "new_version":
                 lines.append(t(lang, "booking.msg_change_contract"))
-            return _bookings_md(emp, lang), "\n\n".join(lines)
+            return _bookings_md(emp, lang), dir_wrap(lang, "\n\n".join(lines))
 
         def do_advisory(token, hall, pkg, date, start, end, guests):
             emp = employee(token)
@@ -725,7 +725,7 @@ def build_booking_ui(db: DatabaseManager, auth: AuthService,
             except ApplicationError as exc:
                 raise gr.Error(str(exc))
             if not suggestions:
-                return t(lang, "booking.advisory_none")
+                return dir_wrap(lang, t(lang, "booking.advisory_none"))
             lines = [f"### {t(lang, 'advisory.title')}"]
             for s in suggestions:
                 lines.append(
@@ -733,7 +733,7 @@ def build_booking_ui(db: DatabaseManager, auth: AuthService,
                     f"{s.start_at.strftime('%Y-%m-%d %H:%M')} – "
                     f"{s.end_at.strftime('%H:%M')} — "
                     f"{format_advisory_reason(lang, s)}")
-            return "\n".join(lines)
+            return dir_wrap(lang, "\n".join(lines))
 
         refresh_book_btn.click(do_refresh_books, inputs=[session_token], outputs=[book_list])
         b_create_btn.click(do_create_book, inputs=[session_token, b_cust, b_hall,

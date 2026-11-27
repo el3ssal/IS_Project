@@ -16,14 +16,14 @@ from ..logic.auth_service import AuthService
 from ..logic.backup_service import BackupService
 from ..utils.exceptions import ApplicationError
 from ..utils.logging_config import get_logger
-from .i18n import LabelRegistry, lang_for_token, t
+from .i18n import LabelRegistry, dir_wrap, lang_for_token, t
 
 logger = get_logger(__name__)
 
 
 def _list_md(rows: list[dict], lang: str) -> str:
     if not rows:
-        return f"_{t(lang, 'bkp.msg_no_backups')}_"
+        return dir_wrap(lang, f"_{t(lang, 'bkp.msg_no_backups')}_")
     out = [f"| {t(lang, 'bkp.table_id')} | {t(lang, 'bkp.table_filename')} | "
            f"{t(lang, 'bkp.table_size')} | {t(lang, 'bkp.table_checksum')} | "
            f"{t(lang, 'bkp.table_created')} | {t(lang, 'bkp.table_validated')} | "
@@ -35,7 +35,7 @@ def _list_md(rows: list[dict], lang: str) -> str:
             f"{str(r['checksum'])[:12]}… | {str(r['created_at'])[:19]} | "
             f"{str(r.get('validated_at') or '—')[:19]} | "
             f"{t(lang, 'common.yes' if r.get('exists_on_disk') else 'common.no')} |")
-    return "\n".join(out)
+    return dir_wrap(lang, "\n".join(out))
 
 
 def build_backup_ui(db: DatabaseManager, auth: AuthService,
@@ -112,7 +112,7 @@ def build_backup_ui(db: DatabaseManager, auth: AuthService,
                      f"- {t(lang, 'bkp.msg_schema')}: v{checks['schema_version']} "
                      f"({t(lang, 'bkp.msg_matches')}: {checks['schema_version_matches']})"]
             gr.Info(t(lang, "bkp.msg_validated").format(id=checks["backup_id"]))
-            return "\n".join(lines)
+            return dir_wrap(lang, "\n".join(lines))
 
         def do_download(token, backup_id):
             emp = employee(token)
@@ -136,9 +136,9 @@ def build_backup_ui(db: DatabaseManager, auth: AuthService,
                 raise gr.Error(str(exc))
             gr.Info(t(lang, "bkp.msg_restored").format(
                 restored=result["restored"], safety=result["safety_copy"]))
-            return t(lang, "bkp.msg_restored_out").format(
+            return dir_wrap(lang, t(lang, "bkp.msg_restored_out").format(
                 restored=result["restored"], safety=result["safety_copy"],
-                id=result["safety_copy_id"])
+                id=result["safety_copy_id"]))
 
         create_btn.click(do_create, inputs=[session_token],
                          outputs=[backups_md])

@@ -31,7 +31,7 @@ from ..logic.staff_service import StaffService
 from ..logic.task_service import TaskService
 from ..utils.exceptions import ApplicationError
 from ..utils.logging_config import get_logger
-from .i18n import (LabelRegistry, format_notification, lang_for_token, t)
+from .i18n import (LabelRegistry, dir_wrap, format_notification, lang_for_token, t)
 
 logger = get_logger(__name__)
 
@@ -77,11 +77,11 @@ NOTIF_TYPE_KEYS = {
 
 def _md_table(headers: list[str], rows: list[list[str]], lang: str) -> str:
     if not rows:
-        return f"_{t(lang, 'common.no_records')}_"
+        return dir_wrap(lang, f"_{t(lang, 'common.no_records')}_")
     out = ["| " + " | ".join(headers) + " |",
            "| " + " | ".join("---" for _ in headers) + " |"]
     out += ["| " + " | ".join(str(c) for c in row) + " |" for row in rows]
-    return "\n".join(out)
+    return dir_wrap(lang, "\n".join(out))
 
 
 def _yes_no(lang: str, value: bool) -> str:
@@ -168,12 +168,12 @@ def build_operations_ui(db: DatabaseManager, auth: AuthService,
                      t(lang, SIG_STATUS_KEYS.get(c.signature_status, "ops.sig_draft")),
                      c.signature_date or "—"]
                     for c in contracts.list_contracts(_system_employee())]
-            return _md_table(
+            return dir_wrap(lang, _md_table(
                 [t(lang, "ops.table_id"), t(lang, "ops.table_number"),
                  t(lang, "ops.table_booking"), t(lang, "ops.table_template"),
                  t(lang, "ops.table_current_version"),
                  t(lang, "ops.table_signature"), t(lang, "ops.table_signed_on")],
-                rows, lang)
+                rows, lang))
 
         def do_refresh_contracts(token):
             employee(token)
@@ -259,12 +259,12 @@ def build_operations_ui(db: DatabaseManager, auth: AuthService,
                 rows = contracts.list_attachments(emp, int(contract_id))
             except ApplicationError as exc:
                 raise gr.Error(str(exc))
-            return _md_table(
+            return dir_wrap(lang, _md_table(
                 [t(lang, "ops.table_id"), t(lang, "ops.table_original_name"),
                  t(lang, "ops.table_category"), t(lang, "ops.table_size"),
                  t(lang, "ops.table_uploaded_by"), t(lang, "ops.table_uploaded_at")],
                 [[r["id"], r["original_filename"], r["category"], r["size_bytes"],
-                  r["uploaded_by"], r["uploaded_at"]] for r in rows], lang)
+                  r["uploaded_by"], r["uploaded_at"]] for r in rows], lang))
 
         def do_download_attachment(token, attachment_id):
             emp = employee(token)
@@ -314,12 +314,12 @@ def build_operations_ui(db: DatabaseManager, auth: AuthService,
             tpl_delete_btn = reg.button("ops.delete_template")
 
         def _templates_md(lang: str):
-            rows = [[t["name"], t["key"],
-                     f"{len(t['body'])} {t(lang, 'ops.chars')}"]
-                    for t in contracts.list_templates(_system_employee())]
-            return _md_table(
+            rows = [[tpl["name"], tpl["key"],
+                     f"{len(tpl['body'])} {t(lang, 'ops.chars')}"]
+                    for tpl in contracts.list_templates(_system_employee())]
+            return dir_wrap(lang, _md_table(
                 [t(lang, "ops.table_name"), t(lang, "ops.table_key"),
-                 t(lang, "ops.table_body_length")], rows, lang)
+                 t(lang, "ops.table_body_length")], rows, lang))
 
         def do_refresh_templates(token):
             employee(token)
@@ -423,10 +423,10 @@ def build_operations_ui(db: DatabaseManager, auth: AuthService,
                              tmpl["event_type_id"] or t(lang, "common.any"),
                              tmpl["package_id"] or t(lang, "common.any"),
                              len(tmpl["items"])])
-            return _md_table(
+            return dir_wrap(lang, _md_table(
                 [t(lang, "ops.table_id"), t(lang, "ops.table_name"),
                  t(lang, "ops.table_event_type"), t(lang, "ops.table_package"),
-                 t(lang, "ops.table_items")], rows, lang)
+                 t(lang, "ops.table_items")], rows, lang))
 
         def _plan_tasks_md(plan: dict, lang: str) -> str:
             rows = [[t["id"], t["name"], t["assigned_to"] or "—",
@@ -435,13 +435,13 @@ def build_operations_ui(db: DatabaseManager, auth: AuthService,
                      t(lang, TASK_STATUS_KEYS.get(t["status"], "ops.task_status_pending"))]
                     for t in plan["tasks"]]
             template = plan.get("template_name") or "—"
-            return (t(lang, "ops.plan_line").format(id=plan["id"], template=template)
+            return dir_wrap(lang, (t(lang, "ops.plan_line").format(id=plan["id"], template=template)
                     + "  \n"
                     + _md_table(
                         [t(lang, "ops.table_id"), t(lang, "ops.table_task"),
                          t(lang, "ops.table_assigned"), t(lang, "ops.table_due"),
                          t(lang, "ops.table_priority"), t(lang, "ops.table_status")],
-                        rows, lang))
+                        rows, lang)))
 
         def do_generate_plan(token, booking_id, template_id):
             emp = employee(token)
@@ -501,14 +501,14 @@ def build_operations_ui(db: DatabaseManager, auth: AuthService,
             return _task_templates_md(lang)
 
         def _task_rows_md(task_rows: list[dict], lang: str) -> str:
-            return _md_table(
+            return dir_wrap(lang, _md_table(
                 [t(lang, "ops.table_id"), t(lang, "ops.table_task"),
                  t(lang, "ops.table_assigned"), t(lang, "ops.table_due"),
                  t(lang, "ops.table_status")],
                 [[r["id"], r["name"], r["assigned_to"] or "—",
                   r["due_at"] or "—",
                   t(lang, TASK_STATUS_KEYS.get(r["status"], "ops.task_status_pending"))]
-                 for r in task_rows], lang)
+                 for r in task_rows], lang))
 
         def do_assign_task(token, task_id, employee_id):
             emp = employee(token)
@@ -576,13 +576,13 @@ def build_operations_ui(db: DatabaseManager, auth: AuthService,
                 rows = tasks.task_history(emp, int(task_id))
             except ApplicationError as exc:
                 raise gr.Error(str(exc))
-            return _md_table(
+            return dir_wrap(lang, _md_table(
                 [t(lang, "ops.table_when"), t(lang, "ops.table_changed_by"),
                  t(lang, "ops.table_action"), t(lang, "ops.table_old"),
                  t(lang, "ops.table_new")],
                 [[r["created_at"], r["employee_id"] or "—", r["action"],
                   r["old_value"] or "—", r["new_value"] or "—"]
-                 for r in rows], lang)
+                 for r in rows], lang))
 
         plan_gen_btn.click(do_generate_plan,
                            inputs=[session_token, plan_booking_id, plan_template_id],
@@ -661,12 +661,12 @@ def build_operations_ui(db: DatabaseManager, auth: AuthService,
                      e["email"], e["specialties"], ", ".join(e["roles"]),
                      _yes_no(lang, e["is_active"])]
                     for e in staff.list_employees(_system_employee())]
-            return _md_table(
+            return dir_wrap(lang, _md_table(
                 [t(lang, "ops.table_id"), t(lang, "ops.table_username"),
                  t(lang, "ops.table_full_name"), t(lang, "ops.table_phone"),
                  t(lang, "ops.table_email"), t(lang, "ops.table_specialties"),
                  t(lang, "ops.table_roles"), t(lang, "ops.table_active")],
-                rows, lang)
+                rows, lang))
 
         def do_refresh_staff(token):
             employee(token)
@@ -693,7 +693,7 @@ def build_operations_ui(db: DatabaseManager, auth: AuthService,
                     pending=counts["pending"], in_progress=counts["in_progress"],
                     completed=counts["completed"]),
             ]
-            return "\n\n".join(lines)
+            return dir_wrap(lang, "\n\n".join(lines))
 
         def do_update_profile(token, employee_id, full_name, phone, email, specialties):
             emp = employee(token)
@@ -766,7 +766,7 @@ def build_operations_ui(db: DatabaseManager, auth: AuthService,
                     date=(date or "").strip() or None)
             except ApplicationError as exc:
                 raise gr.Error(str(exc))
-            return _md_table(
+            return dir_wrap(lang, _md_table(
                 [t(lang, "ops.table_id"), t(lang, "ops.table_employee"),
                  t(lang, "ops.table_date"), t(lang, "ops.table_start"),
                  t(lang, "ops.table_end"), t(lang, "ops.table_kind"),
@@ -775,7 +775,7 @@ def build_operations_ui(db: DatabaseManager, auth: AuthService,
                   r["start_time"] or "—", r["end_time"] or "—",
                   t(lang, AV_KIND_KEYS.get(r["kind"], "ops.av_available")),
                   r["note"] or "—"] for r in rows], lang)
-
+)
         def do_delete_availability(token, entry_id):
             emp = employee(token)
             lang = _lang(token)
@@ -835,11 +835,11 @@ def build_operations_ui(db: DatabaseManager, auth: AuthService,
                              title, body[:80],
                              t(lang, PRIORITY_KEYS.get(n["priority"], "ops.priority_normal")),
                              _yes_no(lang, n["is_read"]), n["created_at"]])
-            return _md_table(
+            return dir_wrap(lang, _md_table(
                 [t(lang, "ops.table_id"), t(lang, "ops.table_type"),
                  t(lang, "ops.table_title"), t(lang, "ops.table_message"),
                  t(lang, "ops.table_priority"), t(lang, "ops.table_read"),
-                 t(lang, "ops.table_created")], rows, lang)
+                 t(lang, "ops.table_created")], rows, lang))
 
         def do_refresh_notif(token, show_read):
             emp = employee(token)
@@ -853,7 +853,7 @@ def build_operations_ui(db: DatabaseManager, auth: AuthService,
             else:
                 config_text = f"_{t(lang, 'ops.msg_config_owner_only')}_"
             gr.Info(t(lang, "ops.msg_unread").format(count=unread))
-            return _notif_md(emp, lang, show_read), config_text
+            return _notif_md(emp, lang, show_read), dir_wrap(lang, config_text)
 
         def do_mark_read(token, notification_id):
             emp = employee(token)

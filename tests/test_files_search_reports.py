@@ -608,9 +608,12 @@ class TestFilesSearchReports(Phase1TestCase):
             self.db, self.owner, entity_type="booking",
             entity_id=booking.id)
         self.assertGreaterEqual(result["total"], 1)
+        # Date filter: use today's date (audit rows are stamped with
+        # the real clock) — a hard-coded date goes stale overnight.
+        today = datetime.now().strftime("%Y-%m-%d")
         result = audit_service.search(
-            self.db, self.owner, date_from="2026-11-26",
-            date_to="2026-11-26")
+            self.db, self.owner, date_from=today,
+            date_to=today)
         self.assertGreaterEqual(result["total"], 1)
         with self.assertRaises(AuthorizationError):
             audit_service.search(self.db, self.receptionist)

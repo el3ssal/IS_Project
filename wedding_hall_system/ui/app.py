@@ -53,7 +53,7 @@ from ..ui.catalog_views import build_catalog_ui
 from ..ui.dashboard_views import build_dashboard_ui
 from ..ui.files_views import build_files_ui
 from ..ui.finance_views import build_finance_ui
-from ..ui.i18n import t
+from ..ui.i18n import dir_wrap, t
 from .rtl import dir_signal_html
 from ..ui.operations_views import build_operations_ui
 from ..ui.reports_views import build_reports_ui
@@ -99,8 +99,8 @@ def build_app(settings: AppSettings | None = None,
         # Built in the venue default language (Arabic); the toggle in
         # the main view switches the language after login.
         with gr.Column(visible=True) as login_view:
-            title_md = gr.Markdown(t("ar", "app.title_heading"))
-            hint_md = gr.Markdown(t("ar", "app.login_hint"))
+            title_md = gr.Markdown(dir_wrap("ar", t("ar", "app.title_heading")))
+            hint_md = gr.Markdown(dir_wrap("ar", t("ar", "app.login_hint")))
             username = gr.Textbox(label=t("ar", "login.username"),
                                   placeholder="owner")
             password = gr.Textbox(label=t("ar", "login.password"),
@@ -120,7 +120,7 @@ def build_app(settings: AppSettings | None = None,
                     choices=[("العربية", "ar"), ("English", "en")],
                     value="ar", label=t("ar", "login.language"))
             status_box = gr.Markdown("")
-            cp_heading = gr.Markdown(t("ar", "login.change_password_heading"))
+            cp_heading = gr.Markdown(dir_wrap("ar", t("ar", "login.change_password_heading")))
             old_pw = gr.Textbox(label=t("ar", "login.current_password"),
                                 type="password")
             new_pw = gr.Textbox(label=t("ar", "login.new_password"),
@@ -164,6 +164,9 @@ def build_app(settings: AppSettings | None = None,
             # component — Gradio rejects the same component twice in
             # one event's outputs.
             updates: dict = {}
+            # Markdown components whose toggle "value" is rendered
+            # text: the toggle wraps those in dir_wrap (A-87).
+            markdown_value_comps: set = set()
 
             def _upd(comp):
                 return updates.setdefault(comp, {})
@@ -187,11 +190,13 @@ def build_app(settings: AppSettings | None = None,
                     (refresh_btn, "login.refresh"),
                     (logout_btn, "login.logout")]:
                 _upd(comp)["value"] = key
+            markdown_value_comps.update([title_md, hint_md, cp_heading])
             for b in built:
                 for comp, key in b.get("labels", []):
                     _upd(comp)["label"] = key
                 for comp, key in b.get("texts", []):
                     _upd(comp)["value"] = key
+                    markdown_value_comps.add(comp)
                 for comp, key in b.get("tabs", []):
                     _upd(comp)["label"] = key
                 for comp, key in b.get("placeholders", []):
@@ -210,7 +215,7 @@ def build_app(settings: AppSettings | None = None,
             n_users = db.query_one("SELECT COUNT(*) AS n FROM employees")["n"]
             n_roles = db.query_one("SELECT COUNT(*) AS n FROM roles")["n"]
             version = db.current_version()
-            return (
+            return dir_wrap(lang, (
                 f"**{t(lang, 'app.status_db')}:** `{settings.db_path}`  \n"
                 f"**{t(lang, 'app.status_schema')}:** {version}  \n"
                 f"**{t(lang, 'app.status_tables')}:** {len(tables)}  \n"
@@ -218,16 +223,16 @@ def build_app(settings: AppSettings | None = None,
                 f"**{t(lang, 'app.status_roles')}:** {n_roles}  \n"
                 f"**{t(lang, 'app.status_venue')}:** {settings.venue_name} "
                 f"({settings.currency}, {settings.timezone})"
-            )
+            ))
 
         def _welcome_md(lang: str, employee) -> str:
             perms = sorted(get_employee_permissions(db, employee.id))
-            return (
+            return dir_wrap(lang, (
                 f"## {t(lang, 'login.welcome')}, {employee.display_name}\n"
                 f"**{t(lang, 'login.username')}:** {employee.username}  \n"
                 f"**{t(lang, 'login.roles')}:** {', '.join(employee.roles) or '—'}  \n"
                 f"**{t(lang, 'login.permissions')} ({len(perms)}):** {', '.join(perms)}"
-            )
+            ))
 
         def _enter_main(employee, token, lang, remember_token):
             """Outputs shared by login and remember-me restore."""
@@ -270,7 +275,7 @@ def build_app(settings: AppSettings | None = None,
             if employee is None:
                 return (None, None, gr.update(visible=True),
                         gr.update(visible=False), "",
-                        t("ar", "login.session_expired"), "", "ar",
+                        dir_wrap("ar", t("ar", "login.session_expired")), "", "ar",
                         gr.update(value="ar"), None,
                         dir_signal_html("ar"))
             lang = get_language(db, employee)
@@ -295,7 +300,10 @@ def build_app(settings: AppSettings | None = None,
                 if "label" in spec:
                     kwargs["label"] = t(lang, spec["label"])
                 if "value" in spec:
-                    kwargs["value"] = t(lang, spec["value"])
+                    value = t(lang, spec["value"])
+                    kwargs["value"] = (dir_wrap(lang, value)
+                                       if comp in markdown_value_comps
+                                       else value)
                 if "placeholder" in spec:
                     kwargs["placeholder"] = t(lang, spec["placeholder"])
                 if "choices" in spec:
