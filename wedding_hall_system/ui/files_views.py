@@ -19,6 +19,7 @@ from ..logic.models import ATTACHMENT_CATEGORIES
 from ..utils.exceptions import ApplicationError
 from ..utils.logging_config import get_logger
 from .i18n import LabelRegistry, dir_wrap, lang_for_token, t
+from .live_refresh import login_follow_up
 
 logger = get_logger(__name__)
 
@@ -203,4 +204,15 @@ def build_files_ui(db: DatabaseManager, auth: AuthService,
                       inputs=[session_token, att_id, lang_state],
                       outputs=[files_list])
 
-    return reg.result()
+    result = reg.result()
+    # A-94: populate the files list right after sign-in (session/
+    # permission-tolerant wrapper, see ui.live_refresh), with no
+    # filters — the full list, as the refresh button does.
+    result["on_login"] = [
+        (login_follow_up(
+            auth,
+            lambda token: do_list(token, "", None, "",
+                                  lang_for_token(db, auth, token)),
+            "do_list_files_on_login"), [files_list]),
+    ]
+    return result

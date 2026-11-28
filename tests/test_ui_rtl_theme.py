@@ -97,7 +97,10 @@ class RtlCssTestCase(Phase1TestCase):
 
 
 class RtlToggleTestCase(Phase1TestCase):
-    def test_dir_signal_component_is_present_with_arabic_default(self):
+    def test_dir_signal_component_is_present_with_english_default(self):
+        # A-93: the login screen is English-only and LTR, so the
+        # initial direction signal is "en" even though the venue
+        # default language is Arabic.
         from gradio.components import HTML
 
         from wedding_hall_system.ui.app import build_app
@@ -105,7 +108,8 @@ class RtlToggleTestCase(Phase1TestCase):
         signals = [b for b in demo.blocks.values()
                    if isinstance(b, HTML) and b.elem_id == "whms-dir-signal"]
         self.assertEqual(len(signals), 1)
-        self.assertIn('data-lang="ar"', signals[0].value)
+        self.assertIn('data-lang="en"', signals[0].value)
+        self.assertIn('data-dir="ltr"', signals[0].value)
 
     def test_language_toggle_flips_dir_signal_both_ways(self):
         from wedding_hall_system.ui.app import build_app
@@ -136,13 +140,20 @@ class RtlToggleTestCase(Phase1TestCase):
         login_fn = _find_fn(demo, "do_login")
         self.assertIsNotNone(login_fn)
         outputs = login_fn("owner", "Owner123!", False)
-        # Last login output is the direction signal (Arabic default).
+        # Last login output is the direction signal — the owner's
+        # preference is Arabic, so the main view is RTL after login.
         self.assertIn('data-lang="ar"', outputs[-1])
         logout_fn = _find_fn(demo, "do_logout")
         self.assertIsNotNone(logout_fn)
         _, token = self.auth.login("owner", "Owner123!")
         logged_out = logout_fn(token, None)
-        self.assertIn('data-lang="ar"', logged_out[-1])
+        # A-93: logout resets the screen to the English LTR login;
+        # the signal is outputs[9], followed by the login-chrome
+        # reset (title, hint, labels, button, language, lang_state).
+        self.assertEqual(len(logged_out), 18)
+        self.assertIn('data-lang="en"', logged_out[9])
+        self.assertIn('data-dir="ltr"', logged_out[9])
+        self.assertEqual(logged_out[-1], "en")
 
 
 class DirWrapRegressionTestCase(Phase1TestCase):

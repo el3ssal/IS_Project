@@ -31,6 +31,7 @@ from ..utils.exceptions import ApplicationError, HallDeleteBlockedError
 from ..utils.logging_config import get_logger
 from ..utils.validators import egp_to_piasters, parse_iso_datetime
 from .i18n import LabelRegistry, dir_wrap, lang_for_token, t, translate_price_label
+from .live_refresh import login_follow_up
 
 logger = get_logger(__name__)
 
@@ -99,6 +100,40 @@ def build_catalog_ui(db: DatabaseManager, auth: AuthService,
         row = db.query_one("SELECT id FROM employees WHERE username = 'owner'")
         from ..logic.models import Employee
         return Employee(id=int(row["id"]), username="owner", full_name="Owner")
+
+    # Named choice builders (A-95): the dropdown_data lambdas below
+    # and the ChoiceRegistry share these, so every option list has
+    # exactly one helper that rebuilds it.
+    def _service_choices(lang: str):
+        return [(s.name, s.id)
+                for s in catalog.list_services(_system_employee())]
+
+    def _package_choices(lang: str):
+        return [(p.name, p.id)
+                for p in catalog.list_packages(_system_employee())]
+
+    def _event_type_choices(lang: str):
+        return [(et.name, et.id)
+                for et in halls.list_event_types(_system_employee())]
+
+    def _rule_hall_choices(lang: str):
+        return [(t(lang, "catalog.any_hall"), None)] + _hall_choices()
+
+    def _rule_pkg_choices(lang: str):
+        return ([(t(lang, "catalog.any_package"), None)]
+                + _package_choices(lang))
+
+    def _rule_type_choices(lang: str):
+        return ([(t(lang, "catalog.any_event_type"), None)]
+                + _event_type_choices(lang))
+
+    def _calc_pkg_choices(lang: str):
+        return ([(t(lang, "catalog.no_package"), None)]
+                + _package_choices(lang))
+
+    def _calc_type_choices(lang: str):
+        return ([(t(lang, "catalog.any"), None)]
+                + _event_type_choices(lang))
 
     # ============================================================== HALLS
     with reg.tab("tab.halls"):
@@ -245,18 +280,18 @@ def build_catalog_ui(db: DatabaseManager, auth: AuthService,
                 return gr.update()
             return do_refresh_halls(token)
 
-        refresh_halls_btn.click(do_refresh_halls, inputs=[session_token], outputs=[halls_list])
-        hall_save_btn.click(do_save_hall, inputs=[session_token, hall_id, hall_name,
+        refresh_halls_evt = refresh_halls_btn.click(do_refresh_halls, inputs=[session_token], outputs=[halls_list])
+        hall_save_evt = hall_save_btn.click(do_save_hall, inputs=[session_token, hall_id, hall_name,
                             hall_capacity, hall_price, hall_status, hall_facilities,
                             hall_notes, hall_desc], outputs=[halls_list])
-        hall_deactivate_btn.click(lambda t, i: do_set_hall_active(t, i, False),
+        hall_deact_evt = hall_deactivate_btn.click(lambda t, i: do_set_hall_active(t, i, False),
                                   inputs=[session_token, hall_id], outputs=[halls_list])
-        hall_reactivate_btn.click(lambda t, i: do_set_hall_active(t, i, True),
+        hall_react_evt = hall_reactivate_btn.click(lambda t, i: do_set_hall_active(t, i, True),
                                   inputs=[session_token, hall_id], outputs=[halls_list])
         hall_delete_btn.click(do_arm_delete_hall, inputs=[session_token, hall_id],
                               outputs=[hall_delete_confirm_btn, hall_delete_cancel_btn,
                                        hall_delete_warn])
-        hall_delete_confirm_btn.click(do_delete_hall, inputs=[session_token, hall_id],
+        hall_del_evt = hall_delete_confirm_btn.click(do_delete_hall, inputs=[session_token, hall_id],
                                       outputs=[halls_list, hall_delete_confirm_btn,
                                                hall_delete_cancel_btn, hall_delete_warn])
         hall_delete_cancel_btn.click(do_cancel_delete_hall, inputs=[],
@@ -475,7 +510,7 @@ def build_catalog_ui(db: DatabaseManager, auth: AuthService,
             return _et_md(lang)
 
         refresh_et_btn.click(do_refresh_et, inputs=[session_token], outputs=[et_list])
-        et_save_btn.click(do_save_et, inputs=[session_token, et_id, et_name,
+        et_save_evt = et_save_btn.click(do_save_et, inputs=[session_token, et_id, et_name,
                           et_duration, et_active], outputs=[et_list])
 
     # ============================================================= PACKAGES
@@ -549,7 +584,7 @@ def build_catalog_ui(db: DatabaseManager, auth: AuthService,
             return _pkg_md(lang)
 
         refresh_pkg_btn.click(do_refresh_pkg, inputs=[session_token], outputs=[pkg_list])
-        pkg_save_btn.click(do_save_pkg, inputs=[session_token, pkg_id, pkg_name,
+        pkg_save_evt = pkg_save_btn.click(do_save_pkg, inputs=[session_token, pkg_id, pkg_name,
                            pkg_price, pkg_desc, pkg_default_dur, pkg_min_dur,
                            pkg_guests, pkg_extra, pkg_active, pkg_halls, pkg_types,
                            pkg_services], outputs=[pkg_list])
@@ -612,7 +647,7 @@ def build_catalog_ui(db: DatabaseManager, auth: AuthService,
             return _svc_md(lang)
 
         refresh_svc_btn.click(do_refresh_svc, inputs=[session_token], outputs=[svc_list])
-        svc_save_btn.click(do_save_svc, inputs=[session_token, svc_id, svc_name,
+        svc_save_evt = svc_save_btn.click(do_save_svc, inputs=[session_token, svc_id, svc_name,
                            svc_method, svc_price, svc_active, svc_desc, svc_halls],
                            outputs=[svc_list])
 
@@ -625,16 +660,11 @@ def build_catalog_ui(db: DatabaseManager, auth: AuthService,
             rule_id = reg.number("catalog.rule_id", precision=0)
             rule_name = reg.textbox("catalog.rule_name")
             rule_hall = reg.dropdown_data(
-                "catalog.rule_hall",
-                lambda lang: [(t(lang, "catalog.any_hall"), None)] + _hall_choices())
+                "catalog.rule_hall", _rule_hall_choices)
             rule_pkg = reg.dropdown_data(
-                "catalog.rule_package",
-                lambda lang: [(t(lang, "catalog.any_package"), None)] +
-                [(p.name, p.id) for p in catalog.list_packages(_system_employee())])
+                "catalog.rule_package", _rule_pkg_choices)
             rule_type = reg.dropdown_data(
-                "catalog.rule_event_type",
-                lambda lang: [(t(lang, "catalog.any_event_type"), None)] +
-                [(t.name, t.id) for t in halls.list_event_types(_system_employee())])
+                "catalog.rule_event_type", _rule_type_choices)
         with gr.Row():
             rule_weekday = reg.dropdown_data(
                 "catalog.rule_weekday",
@@ -695,8 +725,8 @@ def build_catalog_ui(db: DatabaseManager, auth: AuthService,
                 raise gr.Error(str(exc))
             return _rule_md(lang)
 
-        refresh_rule_btn.click(do_refresh_rule, inputs=[session_token], outputs=[rule_list])
-        rule_save_btn.click(do_save_rule, inputs=[session_token, rule_id, rule_name,
+        refresh_rule_evt = refresh_rule_btn.click(do_refresh_rule, inputs=[session_token], outputs=[rule_list])
+        rule_save_evt = rule_save_btn.click(do_save_rule, inputs=[session_token, rule_id, rule_name,
                             rule_hall, rule_pkg, rule_type, rule_weekday, rule_season,
                             rule_adj_type, rule_adj_value, rule_active], outputs=[rule_list])
 
@@ -706,13 +736,9 @@ def build_catalog_ui(db: DatabaseManager, auth: AuthService,
         with gr.Row():
             calc_hall = reg.dropdown("catalog.calc_hall", choices=_hall_choices())
             calc_pkg = reg.dropdown_data(
-                "catalog.calc_package",
-                lambda lang: [(t(lang, "catalog.no_package"), None)] +
-                [(p.name, p.id) for p in catalog.list_packages(_system_employee())])
+                "catalog.calc_package", _calc_pkg_choices)
             calc_type = reg.dropdown_data(
-                "catalog.calc_event_type",
-                lambda lang: [(t(lang, "catalog.any"), None)] +
-                [(t.name, t.id) for t in halls.list_event_types(_system_employee())])
+                "catalog.calc_event_type", _calc_type_choices)
         with gr.Row():
             calc_date = reg.textbox("catalog.calc_date", placeholder="2026-12-04")
             calc_start = reg.textbox("catalog.calc_start", value="18:00")
@@ -779,9 +805,52 @@ def build_catalog_ui(db: DatabaseManager, auth: AuthService,
                        calc_disc_reason], outputs=[calc_out, avail_out])
 
     result = reg.result()
-    # A-91: handlers the main view runs right after a successful
+    # A-91/A-94: handlers the main view runs right after a successful
     # login / session restore (chained with .then() in app.py), so
-    # the halls list is already populated when the user opens the
-    # site. (fn, outputs) pairs, mirroring the "renders" pattern.
-    result["on_login"] = [(do_refresh_halls_on_login, [halls_list])]
+    # every list is already populated when the user opens the site.
+    # (fn, outputs) pairs, mirroring the "renders" pattern. The
+    # wrappers are session/permission-tolerant (ui.live_refresh):
+    # anonymous loads and roles that may not see a list leave it
+    # untouched instead of popping an error at login.
+    result["on_login"] = [
+        (do_refresh_halls_on_login, [halls_list]),
+        (login_follow_up(auth, do_refresh_hours,
+                         "do_refresh_hours_on_login"), [hours_list]),
+        (login_follow_up(auth, do_refresh_maint,
+                         "do_refresh_maint_on_login"), [maint_list]),
+        (login_follow_up(auth, do_refresh_et,
+                         "do_refresh_et_on_login"), [et_list]),
+        (login_follow_up(auth, do_refresh_pkg,
+                         "do_refresh_pkg_on_login"), [pkg_list]),
+        (login_follow_up(auth, do_refresh_svc,
+                         "do_refresh_svc_on_login"), [svc_list]),
+        (login_follow_up(auth, do_refresh_rule,
+                         "do_refresh_rule_on_login"), [rule_list]),
+    ]
+    # A-95: every dropdown/checkbox whose options come from the
+    # database, with the one helper that rebuilds its choices.
+    # app.py refreshes all of them on login and after every mutation
+    # event below, so a hall/package/service/event-type created,
+    # deleted or deactivated on one tab is visible everywhere at once.
+    result["choice_entries"] = [
+        (hours_hall, lambda lang: _hall_choices()),
+        (sp_hall, lambda lang: _hall_choices()),
+        (maint_hall, lambda lang: _hall_choices()),
+        (pkg_halls, lambda lang: _hall_choices()),
+        (svc_halls, lambda lang: _hall_choices()),
+        (rule_hall, _rule_hall_choices),
+        (calc_hall, lambda lang: _hall_choices()),
+        (calc_pkg, _calc_pkg_choices),
+        (calc_type, _calc_type_choices),
+        (calc_services, _service_choices),
+        (rule_pkg, _rule_pkg_choices),
+        (rule_type, _rule_type_choices),
+        (pkg_types, _event_type_choices),
+        (pkg_services, _service_choices),
+    ]
+    result["choice_mutation_events"] = [
+        refresh_halls_evt, hall_save_evt, hall_deact_evt, hall_react_evt,
+        hall_del_evt, pkg_save_evt, svc_save_evt, et_save_evt,
+        rule_save_evt,
+    ]
     return result

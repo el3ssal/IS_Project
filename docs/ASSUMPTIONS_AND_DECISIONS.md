@@ -1147,3 +1147,115 @@ columns would show the same thing. `is_active` stays in the data
 model and in availability logic; only the display column is gone.
 The `catalog.table_active` i18n key is NOT removed: event types,
 packages, services and pricing rules still use it (parity intact).
+
+### A-93 — Login screen is English-only and LTR (2026-11-28)
+
+Ahmed's screenshot showed the login form in Arabic (اسم المستخدم،
+كلمة المرور، تذكرني على هذا الجهاز (٣٠ يوماً)، تسجيل الدخول).
+Requirement: while logged out the ENTIRE login screen — labels,
+inputs, button, remember-me checkbox, login error messages — is
+always English and left-to-right, regardless of the user's saved
+language preference (Arabic default). After a successful login (or
+session/remember-me restore) the main view uses the user's own
+language as before; on logout, back to the English LTR login.
+
+Fix (`ui/app.py` only): the login chrome is built with
+`t("en", ...)` (title, hint, username, password, remember-me,
+button); `lang_state` starts `"en"`; the initial direction signal
+is `dir_signal_html("en")`; the language radio starts at `"en"`;
+both `do_restore` anonymous/expired branches return `"en"` (the
+expired-session message is now the English
+`login.session_expired` string). `do_logout` gains 8 extra
+outputs resetting the login chrome to English (title, hint,
+username, password, remember-me, button, language radio,
+lang_state) — 18 outputs total — because the language toggle
+renames the login components while the user is logged in, and
+without the reset the login form would stay Arabic after logout.
+The login error itself needed no change: `AuthService.login`
+already raises the English "Invalid username or password." The
+main view's bilingual behaviour is unchanged, including the
+pre-existing quirk that `_enter_main` does not rename main-view
+chrome on login, so a user whose preference is English sees
+Arabic main chrome until they toggle (out of scope for A-93).
+No new i18n keys; parity intact (1,300 keys).
+
+### A-94 — Auto-load ALL lists on login (2026-11-28)
+
+A-91 made only the halls list auto-load; every other tab still
+started empty behind a grey "تحديث ..." button. All 21 list
+handlers are now registered in the existing `"on_login"`
+mechanism (builders return `(fn, outputs)` pairs; `app.py`
+chains them with `.then()` after login click, password submit
+and page-load restore — no second mechanism):
+
+- catalog (7): halls, hours, maintenance, event types, packages,
+  services, pricing rules.
+- booking (3): customers (empty search = full list), quotations,
+  bookings.
+- operations (5): contracts, templates, task templates, staff,
+  notifications (unread only; its unread-count toast shows on
+  login, by design).
+- finance (1): expenses. Payments/installments/refunds need a
+  booking/payment ID, so they stay on-demand.
+- dashboard (1): dashboard + pending bookings, in the user's
+  language.
+- calendar (1): current week, all halls.
+- backup (1), settings (1), files (1, no filters = full list).
+
+Reports/search stay on-demand: they need filter values or a
+search term first. The refresh buttons stay as manual refresh —
+they just stop being required.
+
+Shared wrapper `ui/live_refresh.login_follow_up(auth, fn, name,
+n_outputs)`: session-tolerant (no valid session → bare
+`gr.update()` per output) AND permission-tolerant (a denied list
+read — e.g. Staff has no `settings.view` / `backup.manage` —
+leaves the list untouched instead of popping an error right
+after sign-in; the manual refresh button still shows the real
+error). Every wrapper gets a distinct `__name__` so Gradio's
+api_name stays findable in tests and over the API. 22 distinct
+`_on_login` handlers in total (21 lists + the A-95 choices
+refresh).
+
+### A-95 — Hall dropdowns go stale after create/delete/activate; central refresh (2026-11-28)
+
+BUG: after deleting a hall (A-90) it still appeared in dropdowns
+on other tabs (Packages page and others). Root cause confirmed:
+hall/package/event-type/service/template choices were computed
+once at app build and never refreshed, so a create, delete or
+activate on one tab left every other tab's dropdown stale.
+
+Fix: new module `ui/live_refresh.py` holds a `ChoiceRegistry`
+— `(component, choices_fn)` pairs, one helper per option list —
+plus `make_refresh_choices_handler`, which returns the single
+`(fn, outputs)` pair that refreshes all 28 registered
+components. Builders contribute `"choice_entries"` (mirroring
+`"renders"`/`"on_login"`; no builder signature changes) and
+`"choice_mutation_events"` (click events whose handlers can
+change an option list). `app.py` assembles ONE registry after
+all builders ran, appends the refresh pair to `"on_login"`, and
+chains it after every mutation event (9 catalog: halls refresh,
+hall save/deactivate/reactivate/delete, package, service,
+event-type and pricing-rule save; 3 operations: template
+create/update/delete). The registry is created per `build_app`
+call, never a module singleton (tests build the app repeatedly).
+
+Scope, by design: the same mechanism also refreshes package,
+event-type, service and template dropdowns (they go stale the
+same way — e.g. A-90 removes package/service links with a
+deleted hall); the contract-generation template dropdown and the
+calendar hall filter are included. Dropdowns that take typed IDs
+(task-template event-type/package, staff employee IDs, finance
+IDs) have no option lists and are unaffected. Refresh updates
+choices only, never values, so a selection the user already
+made in a form is left alone (the service still validates it on
+submit).
+
+Deactivate semantics: booking flows now use
+`include_inactive=False` (`booking_views._hall_choices`) — a
+deactivated hall disappears from bookable dropdowns (quotation,
+booking, reschedule, advisory), consistent with availability,
+which would refuse it anyway. Catalog configuration dropdowns
+keep `include_inactive=True` (hours, maintenance, packages,
+services, rules need inactive halls to configure/reactivate
+them); the calendar filter was already active-only.

@@ -131,7 +131,7 @@ Verified on this VM: loopback HTTP 200 in ~10 s, LAN mode HTTP 200 in
   bookings/quotations/reschedule history/hall expenses — A-90;
   deactivating/reactivating keeps the status in sync, and the halls
   table shows one status column — A-92; the list loads automatically
-  on login — A-91), weekly hours (multi-interval) + exceptional hours/
+  on login, like every other list now — A-91/A-94), weekly hours (multi-interval) + exceptional hours/
   closures, maintenance blocks, event types, packages, services,
   pricing rules, dynamic pricing with itemised breakdown (package-
   included services at 0, never double-charged; manual discount capped
@@ -213,6 +213,27 @@ Verified on this VM: loopback HTTP 200 in ~10 s, LAN mode HTTP 200 in
   Arabic stays the default; 1,295+ i18n keys, identical in both
   languages — `tests/test_phase8.py` checks parity and that the
   toggle executes and switches tab titles and button text both ways).
+- **A-93 — English-only login screen:** while logged out the whole
+  login screen (labels, inputs, button, remember-me checkbox, error
+  messages) is always English and left-to-right, regardless of the
+  user's saved language; after login the main view uses the user's
+  own language, and logout resets the login screen to English.
+- **A-94 — All lists auto-load on login:** every list that used to
+  start empty behind a "تحديث ..." button (halls, hours,
+  maintenance, event types, packages, services, pricing rules,
+  customers, quotations, bookings, contracts, templates, task
+  templates, staff, notifications, expenses, dashboard, calendar,
+  backups, settings, files) is now populated by the login chain;
+  the refresh buttons stay as manual refresh. Lists a role may not
+  see simply stay empty at login instead of showing an error.
+- **A-95 — Dropdown choices stay fresh:** hall/package/event-type/
+  service/template dropdowns were built once at app start, so a
+  hall created, deleted or deactivated on one tab stayed stale on
+  the others. One `ChoiceRegistry` (`wedding_hall_system/ui/
+  live_refresh.py`) now refreshes all 28 of them on login and after
+  every catalog/operations save or delete; deactivated halls
+  disappear from bookable dropdowns but stay in configuration
+  dropdowns (so they can be reactivated).
 
 ## Remember Me (FR-011, Phase 8)
 

@@ -21,6 +21,7 @@ from ..logic.settings_service import SETTING_SPECS, SettingsService
 from ..utils.exceptions import ApplicationError
 from ..utils.logging_config import get_logger
 from .i18n import LabelRegistry, dir_wrap, lang_for_token, t
+from .live_refresh import login_follow_up
 
 logger = get_logger(__name__)
 
@@ -180,4 +181,13 @@ def build_settings_ui(db: DatabaseManager, auth: AuthService,
                                inputs=[session_token, widgets_json],
                                outputs=[widgets_msg])
 
-    return reg.result()
+    result = reg.result()
+    # A-94: populate the settings list right after sign-in (session/
+    # permission-tolerant wrapper, see ui.live_refresh). A non-Owner
+    # role has no settings.view permission, so the list simply stays
+    # empty for them instead of popping an error at login.
+    result["on_login"] = [
+        (login_follow_up(auth, do_list,
+                         "do_list_settings_on_login"), [settings_md]),
+    ]
+    return result

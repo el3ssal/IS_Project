@@ -65,6 +65,7 @@ from ..ui.dashboard_views import build_dashboard_ui
 from ..ui.files_views import build_files_ui
 from ..ui.finance_views import build_finance_ui
 from ..ui.i18n import dir_wrap, t
+from .live_refresh import ChoiceRegistry, make_refresh_choices_handler
 from .rtl import dir_signal_html
 from ..ui.operations_views import build_operations_ui
 from ..ui.reports_views import build_reports_ui
@@ -86,13 +87,15 @@ def build_app(settings: AppSettings | None = None,
     seed(db)
     auth = AuthService(db, settings)
 
-    with gr.Blocks(title=t("ar", "app.title")) as demo:
+    with gr.Blocks(title=t("en", "app.title")) as demo:
         session_token = gr.State(None)
         current_user = gr.State(None)
         # Session language (Phase 6, SRS §16.3): Arabic is the venue
         # default; the toggle below switches it and persists the
-        # per-user preference (logic/preferences.py).
-        lang_state = gr.State("ar")
+        # per-user preference (logic/preferences.py). A-93: the login
+        # screen itself is English-only and LTR — the state starts
+        # English and only becomes the user's language on sign-in.
+        lang_state = gr.State("en")
         # Remember Me (Phase 8, FR-011): see the module docstring.
         remember_state = gr.BrowserState(
             None, storage_key="whms-remember-me",
@@ -115,22 +118,26 @@ def build_app(settings: AppSettings | None = None,
         # direction live; every handler that can change the language
         # updates this component. Hidden via CSS, not visible=False,
         # so the element is always in the DOM for the observer.
-        dir_signal = gr.HTML(dir_signal_html("ar"),
+        dir_signal = gr.HTML(dir_signal_html("en"),
                              elem_id="whms-dir-signal")
 
         # -- login view -------------------------------------------------
-        # Built in the venue default language (Arabic); the toggle in
-        # the main view switches the language after login.
+        # A-93: English-only and LTR while logged out — every label,
+        # button and message on this screen is built in English, and
+        # the direction signal starts "en", whatever the user's saved
+        # language is. The main view switches to the user's language
+        # after a successful login (or restore); logout resets the
+        # login chrome back to English (do_logout below).
         with gr.Column(visible=True) as login_view:
-            title_md = gr.Markdown(dir_wrap("ar", t("ar", "app.title_heading")))
-            hint_md = gr.Markdown(dir_wrap("ar", t("ar", "app.login_hint")))
-            username = gr.Textbox(label=t("ar", "login.username"),
+            title_md = gr.Markdown(dir_wrap("en", t("en", "app.title_heading")))
+            hint_md = gr.Markdown(dir_wrap("en", t("en", "app.login_hint")))
+            username = gr.Textbox(label=t("en", "login.username"),
                                   placeholder="owner")
-            password = gr.Textbox(label=t("ar", "login.password"),
+            password = gr.Textbox(label=t("en", "login.password"),
                                   type="password")
-            remember_cb = gr.Checkbox(label=t("ar", "login.remember_me"),
+            remember_cb = gr.Checkbox(label=t("en", "login.remember_me"),
                                       value=False)
-            login_btn = gr.Button(t("ar", "login.button"), variant="primary")
+            login_btn = gr.Button(t("en", "login.button"), variant="primary")
             login_msg = gr.Markdown("")
 
         # -- main view --------------------------------------------------
@@ -141,7 +148,7 @@ def build_app(settings: AppSettings | None = None,
                 logout_btn = gr.Button(t("ar", "login.logout"))
                 lang_radio = gr.Radio(
                     choices=[("العربية", "ar"), ("English", "en")],
-                    value="ar", label=t("ar", "login.language"))
+                    value="en", label=t("ar", "login.language"))
             status_box = gr.Markdown("")
             cp_heading = gr.Markdown(dir_wrap("ar", t("ar", "login.change_password_heading")))
             old_pw = gr.Textbox(label=t("ar", "login.current_password"),
@@ -238,6 +245,19 @@ def build_app(settings: AppSettings | None = None,
             on_login: list = []
             for b in built:
                 on_login.extend(b.get("on_login", []))
+            # A-95: refresh every registered dropdown/checkbox choice
+            # on login too. The registry is assembled here, after all
+            # builders ran, so it covers every tab; the builders only
+            # contribute "choice_entries" (component, choices_fn)
+            # pairs and "choice_mutation_events" (click events whose
+            # handlers can change an option list).
+            choice_registry = ChoiceRegistry()
+            for b in built:
+                for comp, fn in b.get("choice_entries", []):
+                    choice_registry.register(comp, fn)
+            refresh_choices_fn, refresh_choices_outputs = (
+                make_refresh_choices_handler(db, auth, choice_registry))
+            on_login.append((refresh_choices_fn, refresh_choices_outputs))
             toggle_components = list(updates)
 
         def _status_text(lang: str = "ar") -> str:
@@ -313,17 +333,18 @@ def build_app(settings: AppSettings | None = None,
                 # A dead session token must not linger in the browser.
                 stored_session = None
             if not stored_token:
+                # A-93: logged out means the English LTR login screen.
                 return (None, None, gr.update(visible=True),
-                        gr.update(visible=False), "", "", "", "ar",
-                        gr.update(value="ar"), None, None,
-                        dir_signal_html("ar"))
+                        gr.update(visible=False), "", "", "", "en",
+                        gr.update(value="en"), None, None,
+                        dir_signal_html("en"))
             employee, new_token = auth.validate_remember_token(stored_token)
             if employee is None:
                 return (None, None, gr.update(visible=True),
                         gr.update(visible=False), "",
-                        dir_wrap("ar", t("ar", "login.session_expired")), "", "ar",
-                        gr.update(value="ar"), None, None,
-                        dir_signal_html("ar"))
+                        dir_wrap("en", t("en", "login.session_expired")), "", "en",
+                        gr.update(value="en"), None, None,
+                        dir_signal_html("en"))
             lang = get_language(db, employee)
             session = auth.create_session(employee)
             gr.Info(t(lang, "login.session_restored"))
@@ -382,10 +403,21 @@ def build_app(settings: AppSettings | None = None,
                                    exc_info=True)
             # A-89: the persisted session token is cleared too, so a
             # later reload cannot sign back in after an explicit logout.
+            # A-93: the login chrome is reset to English LTR as well —
+            # the language toggle renamed it while the user was logged
+            # in, and the logged-out screen must always be English.
             return (
                 None, None,
                 gr.update(visible=True), gr.update(visible=False),
-                "", "", "", None, None, dir_signal_html("ar"),
+                "", "", "", None, None, dir_signal_html("en"),
+                dir_wrap("en", t("en", "app.title_heading")),
+                dir_wrap("en", t("en", "app.login_hint")),
+                gr.update(label=t("en", "login.username")),
+                gr.update(label=t("en", "login.password")),
+                gr.update(label=t("en", "login.remember_me")),
+                gr.update(value=t("en", "login.button")),
+                gr.update(value="en"),
+                "en",
             )
 
         def do_refresh(token):
@@ -438,11 +470,21 @@ def build_app(settings: AppSettings | None = None,
                                  outputs=on_login_outputs)
             load_event.then(on_login_fn, inputs=[session_token],
                             outputs=on_login_outputs)
+        # A-95: the same choices refresh runs after every mutation
+        # that can change an option list (a hall/package/service/
+        # event-type/template save or delete).
+        for b in built:
+            for ev in b.get("choice_mutation_events", []):
+                ev.then(refresh_choices_fn, inputs=[session_token],
+                        outputs=refresh_choices_outputs)
         logout_btn.click(
             do_logout, inputs=[session_token, remember_state],
             outputs=[session_token, current_user, login_view, main_view,
                      welcome, status_box, login_msg, remember_state,
-                     session_state, dir_signal],
+                     session_state, dir_signal,
+                     # A-93: login chrome reset to English on logout.
+                     title_md, hint_md, username, password, remember_cb,
+                     login_btn, lang_radio, lang_state],
         )
         # Language toggle: outputs are the language state, the welcome
         # and status lines, one merged update per toggle component,

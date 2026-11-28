@@ -36,6 +36,7 @@ from ..utils.exceptions import ApplicationError
 from ..utils.logging_config import get_logger
 from ..utils.validators import egp_to_piasters
 from .i18n import LabelRegistry, dir_wrap, lang_for_token, t
+from .live_refresh import login_follow_up
 
 logger = get_logger(__name__)
 
@@ -635,4 +636,12 @@ def build_finance_ui(db: DatabaseManager, auth: AuthService,
         snap_btn.click(do_snapshot, inputs=[session_token, f_bid], outputs=[f_out])
         recon_btn.click(do_recon, inputs=[session_token], outputs=[f_out])
 
-    return reg.result()
+    result = reg.result()
+    # A-94: the expenses list is the one finance list that needs no
+    # ID — populate it right after sign-in (session/permission-
+    # tolerant wrapper, see ui.live_refresh).
+    result["on_login"] = [
+        (login_follow_up(auth, do_list_exp,
+                         "do_list_exp_on_login"), [f_exp_list]),
+    ]
+    return result

@@ -32,6 +32,7 @@ from ..logic.task_service import TaskService
 from ..utils.exceptions import ApplicationError
 from ..utils.logging_config import get_logger
 from .i18n import (LabelRegistry, dir_wrap, format_notification, lang_for_token, t)
+from .live_refresh import login_follow_up
 
 logger = get_logger(__name__)
 
@@ -353,13 +354,13 @@ def build_operations_ui(db: DatabaseManager, auth: AuthService,
 
         refresh_templates_btn.click(do_refresh_templates, inputs=[session_token],
                                     outputs=[templates_list])
-        tpl_create_btn.click(lambda t, n, b, ba: do_tpl_save(t, n, b, ba, False),
+        tpl_create_evt = tpl_create_btn.click(lambda t, n, b, ba: do_tpl_save(t, n, b, ba, False),
                              inputs=[session_token, tpl_name, tpl_body, tpl_body_ar],
                              outputs=[templates_list])
-        tpl_update_btn.click(lambda t, n, b, ba: do_tpl_save(t, n, b, ba, True),
+        tpl_update_evt = tpl_update_btn.click(lambda t, n, b, ba: do_tpl_save(t, n, b, ba, True),
                              inputs=[session_token, tpl_name, tpl_body, tpl_body_ar],
                              outputs=[templates_list])
-        tpl_delete_btn.click(do_tpl_delete, inputs=[session_token, tpl_name],
+        tpl_delete_evt = tpl_delete_btn.click(do_tpl_delete, inputs=[session_token, tpl_name],
                              outputs=[templates_list])
 
     # ================================================== EVENT PLANS & TASKS
@@ -882,4 +883,34 @@ def build_operations_ui(db: DatabaseManager, auth: AuthService,
         notif_read_all_btn.click(do_mark_all_read, inputs=[session_token],
                                  outputs=[notif_md])
 
-    return reg.result()
+    result = reg.result()
+    # A-94: populate the contracts/templates/task-templates/staff/
+    # notifications lists right after sign-in (session/permission-
+    # tolerant wrappers, see ui.live_refresh). The notifications
+    # refresh loads unread only, as its button does; it also shows a
+    # brief unread-count toast on login, by design.
+    result["on_login"] = [
+        (login_follow_up(auth, do_refresh_contracts,
+                         "do_refresh_contracts_on_login"), [contracts_list]),
+        (login_follow_up(auth, do_refresh_templates,
+                         "do_refresh_templates_on_login"), [templates_list]),
+        (login_follow_up(auth, do_refresh_task_templates,
+                         "do_refresh_task_templates_on_login"),
+         [task_templates_list]),
+        (login_follow_up(auth, do_refresh_staff,
+                         "do_refresh_staff_on_login"), [staff_list]),
+        (login_follow_up(auth,
+                         lambda token: do_refresh_notif(token, False),
+                         "do_refresh_notif_on_login", n_outputs=2),
+         [notif_md, notif_config_md]),
+    ]
+    # A-95: the contract-generation template dropdown goes stale when
+    # a template is created or deleted; its choices are rebuilt by
+    # the same helper as at build time.
+    result["choice_entries"] = [
+        (gen_template, lambda lang: _template_choices()),
+    ]
+    result["choice_mutation_events"] = [
+        tpl_create_evt, tpl_update_evt, tpl_delete_evt,
+    ]
+    return result

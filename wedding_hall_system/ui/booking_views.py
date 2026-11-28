@@ -30,6 +30,7 @@ from ..utils.exceptions import ApplicationError
 from ..utils.logging_config import get_logger
 from ..utils.validators import egp_to_piasters, parse_iso_datetime
 from .i18n import LabelRegistry, dir_wrap, format_advisory_reason, lang_for_token, t, translate_price_label
+from .live_refresh import login_follow_up
 
 logger = get_logger(__name__)
 
@@ -117,11 +118,25 @@ def build_booking_ui(db: DatabaseManager, auth: AuthService,
         return Employee(id=int(row["id"]), username="owner", full_name="Owner")
 
     def _hall_choices():
+        # A-95: booking flows only offer halls that can actually be
+        # booked — a deactivated hall is excluded here (availability
+        # would refuse it anyway). Configuration tabs keep listing
+        # inactive halls (catalog_views) so they can be reactivated.
         return [(f"{h.name} — {h.capacity}", h.id)
-                for h in halls.list_halls(_system_employee(), include_inactive=True)]
+                for h in halls.list_halls(_system_employee(), include_inactive=False)]
 
     def _service_choices():
         return [(s.name, s.id) for s in catalog.list_services(_system_employee())]
+
+    # Named choice builders (A-95): shared by the dropdown_data
+    # lambdas below and the ChoiceRegistry, one helper per list.
+    def _package_choices(lang: str):
+        return [(t(lang, "booking.no_package"), None)] + [
+            (p.name, p.id) for p in catalog.list_packages(_system_employee())]
+
+    def _event_type_choices(lang: str):
+        return [(t(lang, "booking.any"), None)] + [
+            (et.name, et.id) for et in halls.list_event_types(_system_employee())]
 
     def _when(date: str, start: str, end: str):
         start_dt = parse_iso_datetime(f"{date}T{start}:00", "Start")
@@ -270,13 +285,9 @@ def build_booking_ui(db: DatabaseManager, auth: AuthService,
             q_cust = reg.number("booking.q_cust", precision=0)
             q_hall = reg.dropdown("booking.q_hall", choices=_hall_choices())
             q_pkg = reg.dropdown_data(
-                "booking.q_pkg",
-                lambda lang: [(t(lang, "booking.no_package"), None)] +
-                [(p.name, p.id) for p in catalog.list_packages(_system_employee())])
+                "booking.q_pkg", _package_choices)
             q_type = reg.dropdown_data(
-                "booking.q_type",
-                lambda lang: [(t(lang, "booking.any"), None)] +
-                [(et.name, et.id) for et in halls.list_event_types(_system_employee())])
+                "booking.q_type", _event_type_choices)
         with gr.Row():
             q_date = reg.textbox("booking.q_date", placeholder="2026-12-04")
             q_start = reg.textbox("booking.q_start", value="18:00")
@@ -390,13 +401,9 @@ def build_booking_ui(db: DatabaseManager, auth: AuthService,
             b_cust = reg.number("booking.b_cust", precision=0)
             b_hall = reg.dropdown("booking.b_hall", choices=_hall_choices())
             b_pkg = reg.dropdown_data(
-                "booking.b_pkg",
-                lambda lang: [(t(lang, "booking.no_package"), None)] +
-                [(p.name, p.id) for p in catalog.list_packages(_system_employee())])
+                "booking.b_pkg", _package_choices)
             b_type = reg.dropdown_data(
-                "booking.b_type",
-                lambda lang: [(t(lang, "booking.any"), None)] +
-                [(et.name, et.id) for et in halls.list_event_types(_system_employee())])
+                "booking.b_type", _event_type_choices)
         with gr.Row():
             b_date = reg.textbox("booking.b_date", placeholder="2026-12-04")
             b_start = reg.textbox("booking.b_start", value="18:00")
@@ -463,9 +470,7 @@ def build_booking_ui(db: DatabaseManager, auth: AuthService,
         with gr.Row():
             adv_hall = reg.dropdown("booking.adv_hall", choices=_hall_choices())
             adv_pkg = reg.dropdown_data(
-                "booking.adv_package",
-                lambda lang: [(t(lang, "booking.no_package"), None)] +
-                [(p.name, p.id) for p in catalog.list_packages(_system_employee())])
+                "booking.adv_package", _package_choices)
             adv_date = reg.textbox("booking.adv_date", placeholder="2026-12-04")
             adv_start = reg.textbox("booking.adv_start", value="18:00")
             adv_end = reg.textbox("booking.adv_end", value="23:00")
@@ -768,4 +773,33 @@ def build_booking_ui(db: DatabaseManager, auth: AuthService,
                                             adv_date, adv_start, adv_end, adv_guests],
                       outputs=[adv_out])
 
-    return reg.result()
+    result = reg.result()
+    # A-94: populate the customers/quotations/bookings lists right
+    # after sign-in (session/permission-tolerant wrappers, see
+    # ui.live_refresh). The customers refresh searches with an empty
+    # term — the full list, as the refresh button does.
+    result["on_login"] = [
+        (login_follow_up(auth, lambda token: do_refresh_cust(token, ""),
+                         "do_refresh_cust_on_login"), [cust_list]),
+        (login_follow_up(auth, do_refresh_quot,
+                         "do_refresh_quot_on_login"), [quot_list]),
+        (login_follow_up(auth, do_refresh_books,
+                         "do_refresh_books_on_login"), [book_list]),
+    ]
+    # A-95: every dropdown/checkbox whose options come from the
+    # database, with the one helper that rebuilds its choices.
+    result["choice_entries"] = [
+        (q_hall, lambda lang: _hall_choices()),
+        (q_pkg, _package_choices),
+        (q_type, _event_type_choices),
+        (q_services, lambda lang: _service_choices()),
+        (b_hall, lambda lang: _hall_choices()),
+        (b_pkg, _package_choices),
+        (b_type, _event_type_choices),
+        (b_services, lambda lang: _service_choices()),
+        (rs_hall, lambda lang: _hall_choices()),
+        (adv_hall, lambda lang: _hall_choices()),
+        (adv_pkg, _package_choices),
+        (ch_services, lambda lang: _service_choices()),
+    ]
+    return result

@@ -115,12 +115,14 @@ class SessionPersistTestCase(Phase1TestCase):
         outputs = logout_fn(token, remember)
         # logout outputs: [session, user, login view, main view,
         # welcome, status, msg, remember, session BrowserState,
-        # dir signal (last)].
-        self.assertEqual(len(outputs), 10)
+        # dir signal (index 9), then the A-93 login-chrome reset:
+        # title, hint, username, password, remember-me, login
+        # button, language radio, lang_state (index 17)].
+        self.assertEqual(len(outputs), 18)
         self.assertTrue(_visible(outputs[2]))
         self.assertFalse(_visible(outputs[3]))
         self.assertIsNone(outputs[8])
         self.assertIsNone(outputs[7])
-        self.assertIn('data-lang="ar"', outputs[9])
+        self.assertIn('data-lang="en"', outputs[9])
         # The server-side session row is gone too.
         self.assertIsNone(self.auth.validate_session(token))

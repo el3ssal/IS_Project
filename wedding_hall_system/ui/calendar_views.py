@@ -23,6 +23,7 @@ from ..logic.calendar_service import RANGE_PRESETS, CalendarService
 from ..utils.exceptions import ApplicationError
 from ..utils.logging_config import get_logger
 from .i18n import LabelRegistry, dir_wrap, lang_for_token, t
+from .live_refresh import login_follow_up
 
 logger = get_logger(__name__)
 
@@ -203,4 +204,18 @@ def build_calendar_ui(db: DatabaseManager, auth: AuthService,
                              rs_reason],
                      outputs=[rs_msg])
 
-    return reg.result()
+    result = reg.result()
+    # A-94: show the current week of events right after sign-in
+    # (session/permission-tolerant wrapper, see ui.live_refresh).
+    result["on_login"] = [
+        (login_follow_up(
+            auth,
+            lambda token: do_show(token, date.today().isoformat(), "week", ""),
+            "do_show_calendar_on_login", n_outputs=2),
+         [events_md, cal_hall]),
+    ]
+    # A-95: the hall filter goes stale when a hall is created,
+    # deleted or deactivated; its choices are rebuilt by the same
+    # helper as at build time (active halls only).
+    result["choice_entries"] = [(cal_hall, _hall_choices)]
+    return result

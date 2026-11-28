@@ -17,6 +17,7 @@ from ..logic.backup_service import BackupService
 from ..utils.exceptions import ApplicationError
 from ..utils.logging_config import get_logger
 from .i18n import LabelRegistry, dir_wrap, lang_for_token, t
+from .live_refresh import login_follow_up
 
 logger = get_logger(__name__)
 
@@ -150,4 +151,13 @@ def build_backup_ui(db: DatabaseManager, auth: AuthService,
         rs_btn.click(do_restore, inputs=[session_token, rs_id, rs_confirm],
                      outputs=[restore_md])
 
-    return reg.result()
+    result = reg.result()
+    # A-94: populate the backups list right after sign-in (session/
+    # permission-tolerant wrapper, see ui.live_refresh). A non-Owner
+    # role has no backup.manage permission, so the list simply stays
+    # empty for them instead of popping an error at login.
+    result["on_login"] = [
+        (login_follow_up(auth, do_list,
+                         "do_list_backups_on_login"), [backups_md]),
+    ]
+    return result

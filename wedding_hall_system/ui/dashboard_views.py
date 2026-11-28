@@ -28,6 +28,7 @@ from ..logic.report_service import ReportService
 from ..utils.exceptions import ApplicationError
 from ..utils.logging_config import get_logger
 from .i18n import WIDGET_TITLES, LabelRegistry, dir_wrap, lang_for_token, t
+from .live_refresh import login_follow_up
 
 logger = get_logger(__name__)
 
@@ -258,4 +259,14 @@ def build_dashboard_ui(db: DatabaseManager, auth: AuthService,
 
     result = reg.result()
     result["renders"] = [(do_refresh, [dash_md, pending_md])]
+    # A-94: populate the dashboard right after sign-in (session/
+    # permission-tolerant wrapper, see ui.live_refresh), in the
+    # user's own language.
+    result["on_login"] = [
+        (login_follow_up(
+            auth,
+            lambda token: do_refresh(token, lang_for_token(db, auth, token)),
+            "do_refresh_dashboard_on_login", n_outputs=2),
+         [dash_md, pending_md]),
+    ]
     return result
