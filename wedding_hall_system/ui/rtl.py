@@ -11,10 +11,12 @@ tests share one source of truth:
    handler that can change the language (login, remember-me restore,
    the language toggle, logout) updates that component. ``RTL_CSS``
    (passed to ``launch(css=...)``) flips the direction of the app
-   container with ``:has()`` on the signal — nothing else. No colors,
-   no background, no footer rules: the app wears Gradio's default
-   theme, so the "Built with Gradio" footer and its light/dark
-   settings gear stay visible (A-85).
+   container with ``:has()`` on the signal, and (A-88) moves Gradio's
+   floating form labels to the right in Arabic — the container flip
+   alone leaves them pinned to the left. No colors, no background,
+   no footer rules: the app wears Gradio's default theme, so the
+   "Built with Gradio" footer and its light/dark settings gear stay
+   visible (A-85).
 
    Why CSS, not JS: the first attempt drove direction from
    ``RTL_JS`` alone (a ``MutationObserver`` through the
@@ -38,6 +40,20 @@ Direction is an inherited CSS property, so setting it on
 layouts reverse automatically). The ``dir_wrap`` helper in
 ``ui/i18n.py`` still wraps dynamic Markdown — it is harmless and
 stays as a second layer.
+
+A-88: the container flip does NOT move Gradio's floating form
+labels. The frontend CSS pins them to the left
+(``label.float { left: var(--block-label-margin); position: absolute
+}``) and the ``<label data-testid="block-label">`` element itself
+carries ``dir="ltr"`` from the component's ``rtl`` prop (default
+``False`` — the app never sets it), so every Textbox/Dropdown/
+Number/Checkbox label stays left-aligned in Arabic even though the
+page is RTL. ``RTL_CSS`` therefore also carries label rules scoped
+under the same ``ar`` signal: they mirror Gradio's own
+``label[dir=rtl]`` treatment (position the chip on the right,
+``direction: rtl``, ``text-align: right``), and right-align text in
+text-like inputs. Number inputs are deliberately excluded — digits
+and spinners stay LTR.
 """
 from __future__ import annotations
 
@@ -47,10 +63,18 @@ from .i18n import dir_for
 # Selectors must live inside the shadow tree: `.gradio-container`
 # works, `body` / `html` do not. The signal span itself is empty, so
 # it renders nothing visible; no rule hides it.
-# ONLY these two rules — no colors, no background, no footer rules.
+# Two direction rules + the A-88 form-label/input rules below — still
+# no colors, no background, no footer rules: the app wears Gradio's
+# default theme, so the "Built with Gradio" footer and its light/dark
+# settings gear stay visible (A-85).
 RTL_CSS = """
 .gradio-container:has(#whms-dir-signal [data-lang="ar"]) { direction: rtl; }
 .gradio-container:has(#whms-dir-signal [data-lang="en"]) { direction: ltr; }
+.gradio-container:has(#whms-dir-signal [data-lang="ar"]) label[data-testid="block-label"] { direction: rtl; text-align: right; border: var(--block-label-border-width) solid var(--block-label-border-color); border-bottom-left-radius: var(--block-radius); border-bottom-right-radius: var(--block-label-radius); border-top-left-radius: var(--block-label-radius); border-top: none; border-right: none; }
+.gradio-container:has(#whms-dir-signal [data-lang="ar"]) label[data-testid="block-label"].float { left: auto; right: var(--block-label-margin); }
+.gradio-container:has(#whms-dir-signal [data-lang="ar"]) label[data-testid="block-label"]:not(.float) { margin-left: 0; margin-right: var(--block-label-margin); }
+.gradio-container:has(#whms-dir-signal [data-lang="ar"]) label[data-testid="block-label"] span { margin-right: 0; margin-left: var(--size-2); }
+.gradio-container:has(#whms-dir-signal [data-lang="ar"]) input[type="text"], .gradio-container:has(#whms-dir-signal [data-lang="ar"]) input[type="password"], .gradio-container:has(#whms-dir-signal [data-lang="ar"]) input[type="email"], .gradio-container:has(#whms-dir-signal [data-lang="ar"]) textarea { text-align: right; }
 """
 
 # -- live RTL switching (secondary to the CSS above) ----------------------

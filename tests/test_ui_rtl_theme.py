@@ -25,23 +25,45 @@ def _find_fn(demo, api_name: str):
 
 
 class RtlCssTestCase(Phase1TestCase):
-    def test_rtl_css_is_only_the_two_direction_rules(self):
+    def test_rtl_css_has_direction_rules_and_label_rules(self):
         from wedding_hall_system.ui.rtl import RTL_CSS
-        # Exactly two rules: rtl for Arabic, ltr for English — and
-        # nothing else. In particular no colors, no background, no
-        # footer rule (the default theme + footer must survive, A-85).
+        # Two direction rules (rtl for Arabic, ltr for English) plus
+        # the A-88 form-label/input rules — and nothing else. In
+        # particular no theme, no background, no footer rule (the
+        # default theme + footer must survive, A-85).
         self.assertIn('.gradio-container:has(#whms-dir-signal [data-lang="ar"])',
                       RTL_CSS)
         self.assertIn("direction: rtl", RTL_CSS)
         self.assertIn('.gradio-container:has(#whms-dir-signal [data-lang="en"])',
                       RTL_CSS)
         self.assertIn("direction: ltr", RTL_CSS)
-        self.assertEqual(RTL_CSS.count("{"), 2)
-        self.assertEqual(RTL_CSS.count("}"), 2)
-        for banned in ("footer", "radial-gradient", "background",
-                       "display", "color", "#0F766E", "#EAB308",
-                       "#FAF8F2", "box-shadow"):
+        for banned in ("footer", "radial-gradient", "#0F766E", "#EAB308",
+                       "#FAF8F2", "box-shadow", "display: none"):
             self.assertNotIn(banned, RTL_CSS)
+
+    def test_label_rules_flip_block_labels_right_in_arabic(self):
+        # A-88: Gradio's floating labels are pinned to the LEFT by the
+        # frontend CSS (label.float { left: ... }) and the <label>
+        # itself carries dir="ltr" from the component's rtl prop
+        # (default False), so the container flip leaves every form
+        # label left-aligned in Arabic. Verified against the installed
+        # Gradio 6.32 frontend: the shared label renders as
+        # <label data-testid="block-label"> (floating when .float).
+        from wedding_hall_system.ui.rtl import RTL_CSS
+        ar_scope = '.gradio-container:has(#whms-dir-signal [data-lang="ar"])'
+        self.assertIn(f'{ar_scope} label[data-testid="block-label"]',
+                      RTL_CSS)
+        self.assertIn('label[data-testid="block-label"].float', RTL_CSS)
+        self.assertIn('right: var(--block-label-margin)', RTL_CSS)
+        self.assertIn('left: auto', RTL_CSS)
+        self.assertIn('label[data-testid="block-label"]:not(.float)', RTL_CSS)
+        self.assertIn('text-align: right', RTL_CSS)
+        # Text-like inputs are right-aligned too; number inputs are
+        # deliberately NOT in the rule, so digits/spinners stay LTR.
+        self.assertIn('input[type="text"]', RTL_CSS)
+        self.assertIn('input[type="password"]', RTL_CSS)
+        self.assertIn('textarea', RTL_CSS)
+        self.assertNotIn('input[type="number"]', RTL_CSS)
 
     def test_js_flips_direction_through_shadow_dom(self):
         from wedding_hall_system.ui.rtl import RTL_JS

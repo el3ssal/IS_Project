@@ -66,6 +66,7 @@ PERMISSIONS: dict[str, str] = {
     "settings.view": "View system/venue settings.",
     # Halls / catalog
     "hall.manage": "Create, update and deactivate halls, schedules and maintenance.",
+    "hall.delete": "Permanently delete a hall that has no bookings, quotations, reschedule history or hall-scoped expenses.",
     "hall.view": "View halls and their schedules.",
     "catalog.manage": "Manage event types, packages, services and pricing rules.",
     "catalog.view": "View event types, packages, services and pricing.",
@@ -113,7 +114,7 @@ PERMISSIONS: dict[str, str] = {
 # Least privilege: no role besides Owner is an administrator (SRS §2.2).
 ROLE_PERMISSIONS: dict[str, list[str]] = {
     "Manager": [
-        "settings.view", "hall.manage", "hall.view", "catalog.manage", "catalog.view",
+        "settings.view", "hall.manage", "hall.delete", "hall.view", "catalog.manage", "catalog.view",
         "customer.create", "customer.view", "quotation.create", "quotation.view",
         "booking.create", "booking.view", "booking.view_price", "booking.update",
         "booking.cancel", "booking.reschedule", "booking.transfer",

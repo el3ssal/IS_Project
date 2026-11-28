@@ -24,6 +24,17 @@ a fresh secret per process and a restart simply asks the user to log
 in again. The token's security does not depend on that secret — it is
 validated server-side.
 
+A-89 adds the same treatment for the *session* token itself
+(storage key ``whms-session``): the footer Settings gear changes the
+theme by reloading the whole page, and a reload wipes ``gr.State``
+— so without this the user was logged out on every light/dark
+switch. The session token is already a random opaque bearer value
+hashed server-side with the same 8-hour expiry, so persisting it in
+localStorage is the same trust model as Remember Me, only
+short-lived; it is validated on every load, cleared on logout, and
+never the password. Remember Me (30-day token) is unchanged and
+stays the fallback when the session has expired.
+
 Post-Phase 8 polish adds live RTL (``ui/rtl.py``): a hidden ``gr.HTML``
 direction signal whose value is ``<span data-lang="ar|en">`` — every
 handler that can change the language (login, restore, toggle, logout)
@@ -85,6 +96,18 @@ def build_app(settings: AppSettings | None = None,
         # Remember Me (Phase 8, FR-011): see the module docstring.
         remember_state = gr.BrowserState(
             None, storage_key="whms-remember-me",
+            secret=os.environ.get("WEDDING_HALL_BROWSER_SECRET") or None)
+        # Session persistence (A-89): the session token itself is
+        # kept in the browser's localStorage (storage key
+        # ``whms-session``) so a full page reload — e.g. the theme
+        # switch in the footer Settings gear — does not log the user
+        # out. Same trust model as Remember Me (random opaque token,
+        # hashed server-side, 8-hour expiry), only short-lived; it is
+        # validated on every load and cleared on logout. The
+        # BrowserState value is the session token: login writes it,
+        # restore reads it, logout clears it.
+        session_state = gr.BrowserState(
+            None, storage_key="whms-session",
             secret=os.environ.get("WEDDING_HALL_BROWSER_SECRET") or None)
         # RTL direction signal (ui/rtl.py): a hidden HTML component
         # whose value is `<span data-lang="ar|en">`. RTL_JS reads it
@@ -208,6 +231,13 @@ def build_app(settings: AppSettings | None = None,
             render_fns: list = []
             for b in built:
                 render_fns.extend(b.get("renders", []))
+            # A-91: handlers to run right after a successful login /
+            # session restore (chained with .then() below), so lists
+            # like the halls table are already populated when the user
+            # opens the site. (fn, outputs) pairs, mirroring "renders".
+            on_login: list = []
+            for b in built:
+                on_login.extend(b.get("on_login", []))
             toggle_components = list(updates)
 
         def _status_text(lang: str = "ar") -> str:
@@ -241,7 +271,7 @@ def build_app(settings: AppSettings | None = None,
                 {"username": employee.username, "roles": employee.roles},
                 gr.update(visible=False), gr.update(visible=True),
                 _welcome_md(lang, employee), _status_text(lang), "", lang,
-                gr.update(value=lang), remember_token,
+                gr.update(value=lang), remember_token, token,
                 dir_signal_html(lang),
             )
 
@@ -262,21 +292,37 @@ def build_app(settings: AppSettings | None = None,
                 username=employee.username))
             return _enter_main(employee, token, lang, remember_token)
 
-        def do_restore(stored_token):
-            """Page load (FR-011): validate the stored remember token,
-            rotate it, open a fresh session, and sign the employee in
-            — or clear the stored token and show the login view."""
+        def do_restore(stored_session, stored_token):
+            """Page load (FR-011 + A-89): first try the persisted
+            session token — a still-valid session signs the employee
+            straight back in, so a full page reload (e.g. the theme
+            switch in the footer Settings gear) does not log them
+            out. If the session is gone/expired, fall back to the
+            Remember Me token (validate, rotate, open a fresh
+            session). If neither works, clear both stored values and
+            show the login view."""
+            if stored_session:
+                employee = auth.validate_session(stored_session)
+                if employee is not None:
+                    lang = get_language(db, employee)
+                    gr.Info(t(lang, "login.session_restored"))
+                    # The Remember Me token was not used: pass it
+                    # through untouched (no rotation).
+                    return _enter_main(employee, stored_session, lang,
+                                       stored_token)
+                # A dead session token must not linger in the browser.
+                stored_session = None
             if not stored_token:
                 return (None, None, gr.update(visible=True),
                         gr.update(visible=False), "", "", "", "ar",
-                        gr.update(value="ar"), None,
+                        gr.update(value="ar"), None, None,
                         dir_signal_html("ar"))
             employee, new_token = auth.validate_remember_token(stored_token)
             if employee is None:
                 return (None, None, gr.update(visible=True),
                         gr.update(visible=False), "",
                         dir_wrap("ar", t("ar", "login.session_expired")), "", "ar",
-                        gr.update(value="ar"), None,
+                        gr.update(value="ar"), None, None,
                         dir_signal_html("ar"))
             lang = get_language(db, employee)
             session = auth.create_session(employee)
@@ -334,10 +380,12 @@ def build_app(settings: AppSettings | None = None,
                 except Exception:  # noqa: BLE001 - logout must succeed
                     logger.warning("remember-token revoke on logout failed",
                                    exc_info=True)
+            # A-89: the persisted session token is cleared too, so a
+            # later reload cannot sign back in after an explicit logout.
             return (
                 None, None,
                 gr.update(visible=True), gr.update(visible=False),
-                "", "", "", None, dir_signal_html("ar"),
+                "", "", "", None, None, dir_signal_html("ar"),
             )
 
         def do_refresh(token):
@@ -360,26 +408,41 @@ def build_app(settings: AppSettings | None = None,
             return "", ""
 
         # -- events -----------------------------------------------------
+        # login_outputs order: session gr.State, current user, views,
+        # welcome/status/message, language, Remember Me BrowserState,
+        # session BrowserState (A-89), direction signal (last).
         login_outputs = [session_token, current_user, login_view, main_view,
                          welcome, status_box, login_msg, lang_state,
-                         lang_radio, remember_state, dir_signal]
-        login_btn.click(
+                         lang_radio, remember_state, session_state, dir_signal]
+        login_click = login_btn.click(
             do_login, inputs=[username, password, remember_cb],
             outputs=login_outputs,
         )
-        password.submit(
+        password_submit = password.submit(
             do_login, inputs=[username, password, remember_cb],
             outputs=login_outputs,
         )
-        demo.load(
-            do_restore, inputs=[remember_state],
+        load_event = demo.load(
+            do_restore, inputs=[session_state, remember_state],
             outputs=login_outputs,
         )
+        # A-91: populate lists right after sign-in — login button,
+        # password submit, and page-load restore alike. The handlers
+        # are session-tolerant (a failed login or an anonymous load
+        # leaves the lists untouched), so chaining is safe even when
+        # the preceding event raised.
+        for on_login_fn, on_login_outputs in on_login:
+            login_click.then(on_login_fn, inputs=[session_token],
+                             outputs=on_login_outputs)
+            password_submit.then(on_login_fn, inputs=[session_token],
+                                 outputs=on_login_outputs)
+            load_event.then(on_login_fn, inputs=[session_token],
+                            outputs=on_login_outputs)
         logout_btn.click(
             do_logout, inputs=[session_token, remember_state],
             outputs=[session_token, current_user, login_view, main_view,
                      welcome, status_box, login_msg, remember_state,
-                     dir_signal],
+                     session_state, dir_signal],
         )
         # Language toggle: outputs are the language state, the welcome
         # and status lines, one merged update per toggle component,

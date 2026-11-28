@@ -599,8 +599,13 @@ class TestI18nPhase8(Phase8TestCase):
             self.assertRegex(label, self.ARABIC_RE, label)
         states = [b for b in demo.blocks.values()
                   if isinstance(b, BrowserState)]
-        self.assertEqual(len(states), 1)
-        self.assertEqual(states[0].storage_key, "whms-remember-me")
+        # A-89: two BrowserStates now — Remember Me (30 days) and the
+        # persisted session token (8 hours), both restored on load.
+        self.assertEqual(len(states), 2)
+        self.assertEqual({s.storage_key for s in states},
+                         {"whms-remember-me", "whms-session"})
+        remember = next(s for s in states
+                        if s.storage_key == "whms-remember-me")
         load_fns = []
         for fn in demo.fns.values():
             for target in (fn.targets or []):
@@ -609,9 +614,12 @@ class TestI18nPhase8(Phase8TestCase):
                 if name == "load":
                     load_fns.append(fn)
         self.assertEqual(len(load_fns), 1)
-        bs_id = states[0]._id
+        bs_id = remember._id
         self.assertIn(bs_id, [getattr(c, "_id", c)
                               for c in load_fns[0].inputs])
         self.assertIn(bs_id, [getattr(c, "_id", c)
                               for c in load_fns[0].outputs])
-        self.assertEqual(len(load_fns[0].outputs), 11)
+        # A-89: the load handler takes both BrowserStates and returns
+        # 12 outputs (the session BrowserState sits before the dir
+        # signal, which stays last).
+        self.assertEqual(len(load_fns[0].outputs), 12)

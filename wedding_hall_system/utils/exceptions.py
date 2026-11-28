@@ -46,6 +46,22 @@ class RefundLimitExceededError(ApplicationError):
     """A refund would exceed the refundable amount for its payment/booking."""
 
 
+class HallDeleteBlockedError(ValidationError):
+    def __init__(self, hall_name: str, bookings: int = 0,
+                 quotations: int = 0, history: int = 0,
+                 expenses: int = 0) -> None:
+        super().__init__(
+            f"Cannot delete hall '{hall_name}': it has {bookings} "
+            f"booking(s), {quotations} quotation(s), {history} "
+            f"reschedule record(s) and {expenses} expense(s) that must "
+            f"be preserved. Deactivate it instead.")
+        self.hall_name = hall_name
+        self.bookings = bookings
+        self.quotations = quotations
+        self.history = history
+        self.expenses = expenses
+
+
 class DatabaseOperationError(ApplicationError):
     """A database operation failed (including busy/locked after retries)."""
 

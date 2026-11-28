@@ -27,7 +27,7 @@ from ..logic.catalog_service import CatalogService
 from ..logic.hall_service import HallService
 from ..logic.models import ServiceSelection
 from ..logic.pricing_service import PricingService
-from ..utils.exceptions import ApplicationError
+from ..utils.exceptions import ApplicationError, HallDeleteBlockedError
 from ..utils.logging_config import get_logger
 from ..utils.validators import egp_to_piasters, parse_iso_datetime
 from .i18n import LabelRegistry, dir_wrap, lang_for_token, t, translate_price_label
@@ -126,20 +126,33 @@ def build_catalog_ui(db: DatabaseManager, auth: AuthService,
             hall_save_btn = reg.button("catalog.save_hall", variant="primary")
             hall_deactivate_btn = reg.button("catalog.deactivate_hall")
             hall_reactivate_btn = reg.button("catalog.reactivate_hall")
+            hall_delete_btn = reg.button("catalog.delete_hall")
+        # Two-step delete (A-90): the first click only arms the
+        # delete and shows the confirm/cancel buttons + a warning;
+        # nothing is deleted until "Confirm delete" is clicked.
+        hall_delete_warn = gr.Markdown("")
+        with gr.Row():
+            hall_delete_confirm_btn = reg.button(
+                "catalog.confirm_delete_hall", visible=False)
+            hall_delete_cancel_btn = reg.button(
+                "common.cancel", visible=False)
 
         def _halls_md(lang: str):
             rows = []
             for h in halls.list_halls(_system_employee(), include_inactive=True):
+                # A-92: the table shows ONE status column (الحالة).
+                # The old نشط (is_active) column duplicated it and
+                # disagreed with it; is_active stays in the data
+                # model and in availability logic, it is just not
+                # displayed anymore.
                 rows.append([h.id, h.name, h.capacity, format_money(h.base_price),
                              t(lang, STATUS_KEYS.get(h.status, "catalog.status_active")),
-                             _yes_no(lang, h.is_active),
                              ", ".join(h.facilities)])
             return dir_wrap(lang, _md_table(
                 [t(lang, "catalog.table_id"), t(lang, "catalog.table_name"),
                  t(lang, "catalog.table_capacity"),
                  t(lang, "catalog.table_base_price"),
                  t(lang, "catalog.table_status"),
-                 t(lang, "catalog.table_active"),
                  t(lang, "catalog.table_facilities")], rows, lang))
 
         def do_refresh_halls(token):
@@ -183,6 +196,55 @@ def build_catalog_ui(db: DatabaseManager, auth: AuthService,
                 state=t(lang, "catalog.status_active" if active else "catalog.status_inactive")))
             return _halls_md(lang)
 
+        def do_arm_delete_hall(token, hid):
+            """First step of the two-step delete (A-90): show the
+            confirm/cancel buttons and a warning naming the hall.
+            Nothing is deleted here; the permission check happens on
+            confirm, in the service."""
+            emp = employee(token)
+            lang = _lang(token)
+            if not hid:
+                raise gr.Error(t(lang, "catalog.msg_need_hall_id"))
+            try:
+                hall = halls.get_hall(emp, int(hid))
+            except ApplicationError as exc:
+                raise gr.Error(str(exc))
+            return (gr.update(visible=True), gr.update(visible=True),
+                    dir_wrap(lang, t(lang, "catalog.msg_hall_delete_confirm").format(
+                        name=hall.name)))
+
+        def do_delete_hall(token, hid):
+            """Second step: permanently delete, or refuse with a
+            bilingual message when preserved records block it."""
+            emp = employee(token)
+            lang = _lang(token)
+            if not hid:
+                raise gr.Error(t(lang, "catalog.msg_need_hall_id"))
+            try:
+                name = halls.delete_hall(emp, int(hid))
+            except HallDeleteBlockedError as exc:
+                raise gr.Error(t(lang, "catalog.msg_hall_delete_blocked").format(
+                    name=exc.hall_name, bookings=exc.bookings,
+                    quotations=exc.quotations, history=exc.history,
+                    expenses=exc.expenses))
+            except ApplicationError as exc:
+                raise gr.Error(str(exc))
+            gr.Info(t(lang, "catalog.msg_hall_deleted").format(name=name))
+            return (_halls_md(lang), gr.update(visible=False),
+                    gr.update(visible=False), "")
+
+        def do_cancel_delete_hall():
+            return (gr.update(visible=False), gr.update(visible=False), "")
+
+        def do_refresh_halls_on_login(token):
+            """Login/restore follow-up (A-91): populate the halls list
+            right after sign-in, so the table is already filled when
+            the user opens the site. Anonymous page loads (no valid
+            session) leave the list untouched instead of raising."""
+            if auth.validate_session(token) is None:
+                return gr.update()
+            return do_refresh_halls(token)
+
         refresh_halls_btn.click(do_refresh_halls, inputs=[session_token], outputs=[halls_list])
         hall_save_btn.click(do_save_hall, inputs=[session_token, hall_id, hall_name,
                             hall_capacity, hall_price, hall_status, hall_facilities,
@@ -191,6 +253,16 @@ def build_catalog_ui(db: DatabaseManager, auth: AuthService,
                                   inputs=[session_token, hall_id], outputs=[halls_list])
         hall_reactivate_btn.click(lambda t, i: do_set_hall_active(t, i, True),
                                   inputs=[session_token, hall_id], outputs=[halls_list])
+        hall_delete_btn.click(do_arm_delete_hall, inputs=[session_token, hall_id],
+                              outputs=[hall_delete_confirm_btn, hall_delete_cancel_btn,
+                                       hall_delete_warn])
+        hall_delete_confirm_btn.click(do_delete_hall, inputs=[session_token, hall_id],
+                                      outputs=[halls_list, hall_delete_confirm_btn,
+                                               hall_delete_cancel_btn, hall_delete_warn])
+        hall_delete_cancel_btn.click(do_cancel_delete_hall, inputs=[],
+                                     outputs=[hall_delete_confirm_btn,
+                                              hall_delete_cancel_btn,
+                                              hall_delete_warn])
 
     # ============================================================== HOURS
     with reg.tab("tab.hours"):
@@ -706,4 +778,10 @@ def build_catalog_ui(db: DatabaseManager, auth: AuthService,
                        calc_services, calc_disc_type, calc_disc_value,
                        calc_disc_reason], outputs=[calc_out, avail_out])
 
-    return reg.result()
+    result = reg.result()
+    # A-91: handlers the main view runs right after a successful
+    # login / session restore (chained with .then() in app.py), so
+    # the halls list is already populated when the user opens the
+    # site. (fn, outputs) pairs, mirroring the "renders" pattern.
+    result["on_login"] = [(do_refresh_halls_on_login, [halls_list])]
+    return result

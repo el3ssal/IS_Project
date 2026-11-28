@@ -1014,3 +1014,136 @@ full suite + a live server check (served config carries the RTL
 CSS, no theme). Remaining risk: the CSS flip is verified at
 mechanism level, not by a screenshot — Ahmed does the visual check
 on his device.
+
+### A-88 — Form-field labels need their own RTL CSS rules; the container flip does not move them (2026-11-28)
+
+Ahmed's screenshot (change-password form) showed the labels above
+the textboxes — "كلمة المرور الحالية" and "كلمة المرور الجديدة (8
+أحرف فأكثر، حرف + رقم)" — still left-aligned in Arabic, even though
+the page direction was RTL. Root cause, verified against the
+installed Gradio 6.32 frontend bundle (`src-*.js` / `src-*.css`):
+Gradio renders every component label through one shared component,
+`<label data-testid="block-label">`, and its CSS pins it to the
+LEFT (`label.float { left: var(--block-label-margin); position:
+absolute }`); the `<label>` itself also carries `dir="ltr"` from the
+component's `rtl` prop, which defaults to `False` and the app never
+sets. The container-direction flip therefore cannot move labels, and
+`dir_wrap` cannot help either — labels are not Markdown.
+
+Fix (A-88): `ui/rtl.py::RTL_CSS` gains label rules scoped under the
+same `ar` `:has()` signal, mirroring Gradio's own
+`label[dir=rtl]` treatment: `direction: rtl`, `text-align: right`,
+the floating chip moved to the right (`left: auto; right:
+var(--block-label-margin)`), the static variant's margin flipped,
+and the icon span's margin swapped. Text-like inputs
+(`input[type="text"|"password"|"email"]`, `textarea`) are also
+right-aligned under `ar`; `input[type="number"]` is deliberately
+excluded so digits and spinners stay LTR. CSS `direction`
+overrides the `dir` attribute (a presentational hint), and the
+`:has()` selector's ID out-specifies Gradio's built-in label rules,
+so no `!important` is needed. Still no theme/color/footer CSS.
+`tests/test_ui_rtl_theme.py::test_rtl_css_is_only_the_two_direction_rules`
+was rewritten for this (it pinned "exactly two rules"); the
+`gradio-ui-rtl` skill records the label mechanism. Remaining risk:
+the label flip is verified at mechanism level (served CSS +
+selector match against the installed frontend + specificity) — the
+final visual check is Ahmed's screenshot on his device.
+
+### A-89 — Persist the session token in the browser so a page reload (theme switch) does not log the user out (2026-11-28)
+
+Ahmed reported that switching light/dark via the footer Settings
+gear logged him out and forced a re-login. Root cause confirmed in
+code: the session lives in `gr.State`, and the theme switch reloads
+the whole page, wiping it; the Phase 8 Remember Me restore
+(`gr.BrowserState` key `whms-remember-me`) only fires when the user
+checked Remember Me.
+
+Fix (A-89): the session token itself is now persisted in the
+browser's localStorage through a second `gr.BrowserState`
+(storage key `whms-session`, same optional
+`WEDDING_HALL_BROWSER_SECRET`), written on login, read on page
+load (`do_restore` tries the session first, then falls back to the
+Remember Me token exactly as before), and cleared on logout. The
+session token is already a random opaque bearer value hashed
+server-side with the 8-hour expiry, so persisting it is the same
+trust model as Remember Me, only short-lived; it is validated on
+every load (an expired/revoked token falls through to Remember Me
+or to the login screen, and a dead token is cleared from the
+browser), never the password. Remember Me (30-day token, rotation,
+revocation rules) is unchanged. `tests/test_session_persist.py`
+(6 tests) covers login-writes-token, restore-with-valid-session,
+expired-session-falls-back-to-Remember-Me, invalid-tokens-show-login,
+and logout-clears-token. Note: the app-level restore handler shares
+its `__name__` with the backup-restore handler, so Gradio
+deduplicates the api_name (`do_restore` vs `do_restore_1`) — the
+test finds it by signature (2 inputs, 12 outputs), not by name.
+
+### A-90 — Permanent hall deletion, gated by `hall.delete`, blocked by preserved records (2026-11-28)
+
+Ahmed could not delete a hall he created: Phase 2 only offered
+deactivate/reactivate (never hard delete). New
+`HallService.delete_hall` (permission `hall.delete`, granted to
+Owner — automatically, via the seed's "Owner gets every permission"
+— and Manager; 43 permissions now): the hall is deleted only when
+it has NO business/financial records that must be preserved. The
+blockers are any booking (any status), any quotation (any status),
+any reschedule-history row naming the hall (old or new hall — a
+rescheduled booking no longer points at its old hall, so history
+needs its own check), and any hall-scoped expense
+(`scope_type='hall'`). A blocked delete raises
+`HallDeleteBlockedError` (a `ValidationError` carrying the counts)
+so the UI renders the block in the user's language. Hall-owned
+configuration has no meaning without the hall and is removed with
+it in the same transaction: weekly hours, special hours,
+maintenance blocks, package/service links, hall-scoped pricing
+rules. The deletion is audited (`hall.deleted`, old name/capacity).
+No schema change — the permission is seeded with `INSERT OR IGNORE`
+on every launch, so existing databases gain it automatically. UI:
+two-step delete in the Halls tab (Delete → confirm/cancel buttons
++ a warning naming the hall → Confirm deletes; Cancel aborts).
+New i18n keys (both languages, parity enforced):
+`catalog.delete_hall`, `catalog.confirm_delete_hall`,
+`catalog.msg_hall_delete_confirm`, `catalog.msg_hall_deleted`,
+`catalog.msg_hall_delete_blocked`.
+
+### A-91 — Auto-load the halls list on login / session restore (2026-11-28)
+
+The halls table Markdown started empty and only filled when the
+user clicked "تحديث القاعات". The existing refresh logic is now
+wired into the login-success and page-load-restore path: builders
+may return an `"on_login"` list of `(fn, outputs)` pairs (mirroring
+the `"renders"` pattern the language toggle uses), and `app.py`
+chains each pair with `.then()` after the login click, the password
+submit, and the `demo.load` restore event. The halls handler
+(`do_refresh_halls_on_login`) reuses `do_refresh_halls` unchanged
+— no duplicated query logic — and is session-tolerant: with no
+valid session it returns a bare `gr.update()` (list untouched, no
+error popup), so anonymous loads and failed logins are safe. Scope
+is the halls list only; other tabs still refresh on demand.
+
+### A-92 — One status column in the halls table; `status` and `is_active` stay in sync (2026-11-28)
+
+The halls table showed الحالة (descriptive `status`:
+active/inactive/maintenance, set from the form dropdown) and نشط
+(the boolean `is_active` soft-delete flag, flipped by the
+deactivate/reactivate buttons) side by side — and they disagreed:
+deactivating a hall flipped `is_active` only and left
+`status="active"`, so the table read الحالة=نشطة with نشط=لا.
+Availability already requires both (`is_bookable` = `is_active`
+AND `status == "active"`).
+
+Fix: `set_hall_active` now syncs the status — deactivating sets
+status to `"inactive"` when it was `"active"` (a `"maintenance"`
+status is preserved), reactivating sets status to `"active"` when
+it was `"inactive"` (a `"maintenance"` status is preserved).
+`update_hall` applies the same sync when the form changes the
+status directly without touching the flag (`"inactive"` →
+deactivated, `"active"` → activated, `"maintenance"` leaves the
+flag alone); `set_hall_active` passes both explicitly, so it is
+unaffected. Per Ahmed's correction the نشط column is REMOVED from
+the halls table entirely — the table now has 6 columns (الرقم،
+الاسم، السعة، السعر الأساسي، الحالة، المرافق) — because the two
+columns would show the same thing. `is_active` stays in the data
+model and in availability logic; only the display column is gone.
+The `catalog.table_active` i18n key is NOT removed: event types,
+packages, services and pricing rules still use it (parity intact).

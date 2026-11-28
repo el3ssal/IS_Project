@@ -16,7 +16,7 @@ implemented and verified, 16 of 16 non-functional requirements,
 25 of 25 business rules enforced; 22 of 22 SRS §21 tests implemented
 and verified; 12 of 12 deck requirements met.
 
-Solo project by Ahmed Ashraf Elassal, Faculty of Computers and    
+Solo project by Ahmed Ashraf Elassal, Faculty of Computers and
 Artificial Intelligence, Benha University. This is a fresh solo restart
 (2026-11-26): no team, no shared scaffold. Phase 0 deliverables are in
 `docs/` (traceability matrix, gap analysis, architecture review).
@@ -122,12 +122,16 @@ Verified on this VM: loopback HTTP 200 in ~10 s, LAN mode HTTP 200 in
 ## Features (by phase)
 
 - **Phase 1 — Foundation:** 56-table schema (v5 after Phase 8),
-  roles/permissions as data (5 roles, 42 permissions, least
+  roles/permissions as data (5 roles, 43 permissions, least
   privilege), PBKDF2 auth with lockout (5 fails / 15 min), hashed
   session tokens, audit log, Owner/Manager/Receptionist/Accountant/
   Staff demo accounts.
-- **Phase 2 — Halls, catalog, pricing:** hall CRUD (deactivate, never
-  hard delete), weekly hours (multi-interval) + exceptional hours/
+- **Phase 2 — Halls, catalog, pricing:** hall CRUD (create, update,
+  deactivate/reactivate, and permanent delete for halls with no
+  bookings/quotations/reschedule history/hall expenses — A-90;
+  deactivating/reactivating keeps the status in sync, and the halls
+  table shows one status column — A-92; the list loads automatically
+  on login — A-91), weekly hours (multi-interval) + exceptional hours/
   closures, maintenance blocks, event types, packages, services,
   pricing rules, dynamic pricing with itemised breakdown (package-
   included services at 0, never double-charged; manual discount capped
@@ -173,9 +177,16 @@ Verified on this VM: loopback HTTP 200 in ~10 s, LAN mode HTTP 200 in
   was REVERTED at Ahmed's request (A-85): the app uses Gradio's
   default theme, so the "Built with Gradio" footer and its
   light/dark settings gear stay visible. Verified by
-  `tests/test_ui_rtl_theme.py` (11 tests) and a live server check
+  `tests/test_ui_rtl_theme.py` (12 tests) and a live server check
   (served config carries the RTL CSS, no theme; `gradio_client`
   login/toggle flips the direction signal both ways).
+- **A-88 — RTL form labels:** the container flip did not move
+  Gradio's floating labels (pinned left by the frontend CSS, and the
+  `<label>` itself carries `dir="ltr"`), so `RTL_CSS` now also
+  carries label rules scoped under the Arabic signal (chip on the
+  right, `direction: rtl`, `text-align: right`; text inputs
+  right-aligned too, number inputs excluded). See A-88 in
+  `docs/ASSUMPTIONS_AND_DECISIONS.md`.
 - **A-87 — Per-value `dir_wrap` for Markdown text blocks:**
   container `direction` alone did not flip Markdown text blocks
   (welcome header, DB status, headings, table lists) in the user's
@@ -220,6 +231,16 @@ stable secret if you want "Remember Me" to survive a server restart
 (without it, Gradio generates a fresh secret per process and a restart
 simply asks the user to log in again). Without Remember Me, sessions
 still last up to 8 h as before.
+
+**Session persistence across reloads (A-89):** the session token
+itself is also kept in the browser's localStorage (`BrowserState`
+key `whms-session`), so a full page reload — e.g. switching
+light/dark in the footer Settings gear, which reloads the page —
+does not log the user out. On load the session is validated first;
+if it expired, Remember Me (above) is the fallback, otherwise the
+login screen shows. The token is cleared on logout. Same trust
+model as Remember Me (random opaque token, hashed server-side,
+8-hour expiry), only short-lived; the password is never stored.
 
 ## Backup and restore (Owner only, `backup.manage`)
 

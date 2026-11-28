@@ -526,14 +526,20 @@ class TestFinance(Phase1TestCase):
             new_end_at=FRIDAY_END, reason="Customer wants Friday")
         self.assertEqual(moved.total_amount, 4_400_000)
         # Status stays Confirmed; the 400,000 EGP increase is
-        # outstanding with a due date (event minus 7 days = 2026-11-27).
+        # outstanding with a due date. The due date is the event
+        # minus 7 days (2026-11-27), clamped to "now" when that
+        # deadline is already past — so the expectation is computed
+        # from today, not hard-coded (it broke on 2026-11-28).
         self.assertEqual(moved.status, "confirmed")
         profit = self.bookings.profit(self.owner, booking.id)
         self.assertEqual(profit["outstanding"], 3_200_000)
         history = self.db.query_all(
             "SELECT * FROM reschedule_history WHERE booking_id = ?",
             (booking.id,))
-        self.assertEqual(history[0]["due_at"][:10], "2026-11-27")
+        due = FRIDAY - timedelta(days=7)
+        expected_due = (due if due > datetime.now() else datetime.now())
+        self.assertEqual(history[0]["due_at"][:10],
+                         expected_due.strftime("%Y-%m-%d"))
 
     def test_reschedule_shifts_task_due_dates(self):
         booking = self._book()

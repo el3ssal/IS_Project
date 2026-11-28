@@ -12,7 +12,11 @@ from datetime import datetime
 from ..config.settings import AppSettings
 from ..data.database import DatabaseManager
 from ..data.repositories import catalog_repository as repo
-from ..utils.exceptions import NotFoundError, ValidationError
+from ..utils.exceptions import (
+    HallDeleteBlockedError,
+    NotFoundError,
+    ValidationError,
+)
 from ..utils.logging_config import get_logger
 from ..utils.validators import (
     require_text,
@@ -87,6 +91,18 @@ class HallService:
         require_permission(self.db, employee, "hall.manage")
         old = _get_hall_or_raise(self.db, hall_id)
         merged = {**old, **{k: v for k, v in fields.items() if v is not None}}
+        # A-92: when the form changes the descriptive status directly
+        # (without touching the flag), keep the flag in sync the same
+        # way: "inactive" deactivates, "active" activates;
+        # "maintenance" leaves the flag alone. set_hall_active passes
+        # both explicitly, so this never overrides its
+        # preserved-maintenance rule.
+        if (fields.get("status") is not None
+                and fields.get("is_active") is None):
+            if fields["status"] == "inactive":
+                merged["is_active"] = False
+            elif fields["status"] == "active":
+                merged["is_active"] = True
         hall = Hall(**{k: v for k, v in merged.items() if k in Hall.__dataclass_fields__})
         if hall.name != old["name"] and repo.get_hall_by_name(self.db, hall.name) is not None:
             raise ValidationError(f"A hall named '{hall.name}' already exists.")
@@ -110,9 +126,81 @@ class HallService:
         """Deactivate/reactivate. Historical bookings are never deleted."""
         require_permission(self.db, employee, "hall.manage")
         old = _get_hall_or_raise(self.db, hall_id)
-        hall = self.update_hall(employee, hall_id, is_active=is_active)
-        logger.info("Hall id=%s active=%s (was %s)", hall_id, is_active, old["is_active"])
+        # A-92: keep the descriptive status in sync with the
+        # soft-delete flag, so the single الحالة column never lies:
+        # deactivating an "active" hall marks it "inactive";
+        # reactivating an "inactive" hall marks it "active". A hall
+        # under "maintenance" keeps that status either way — it is
+        # still not bookable (is_bookable needs status == "active"
+        # AND is_active).
+        if is_active:
+            status = "active" if old["status"] == "inactive" else old["status"]
+        else:
+            status = "inactive" if old["status"] == "active" else old["status"]
+        hall = self.update_hall(employee, hall_id, is_active=is_active,
+                                status=status)
+        logger.info("Hall id=%s active=%s status=%s (was %s/%s)", hall_id,
+                    is_active, status, old["is_active"], old["status"])
         return hall
+
+    def delete_hall(self, employee, hall_id: int) -> str:
+        """Permanently delete a hall (A-90).
+
+        Requires ``hall.delete`` (Owner/Manager). Blocked — with an
+        error carrying the counts, so the UI can render the block in
+        the user's language — when the hall has business/financial
+        records that must be preserved: any booking, any quotation,
+        any reschedule-history row naming it (old or new hall), or
+        any hall-scoped expense. Hall-owned configuration (weekly and
+        special hours, maintenance blocks, package/service links,
+        hall-scoped pricing rules) has no meaning without the hall
+        and is removed with it, in the same transaction. The
+        deletion is audited with the hall's name and capacity.
+        Returns the deleted hall's name.
+        """
+        require_permission(self.db, employee, "hall.delete")
+        hall = _get_hall_or_raise(self.db, hall_id)
+        counts = self.db.query_one(
+            """SELECT
+                   (SELECT COUNT(*) FROM bookings WHERE hall_id = ?) AS bookings,
+                   (SELECT COUNT(*) FROM quotations WHERE hall_id = ?) AS quotations,
+                   (SELECT COUNT(*) FROM reschedule_history
+                     WHERE old_hall_id = ? OR new_hall_id = ?) AS history,
+                   (SELECT COUNT(*) FROM expenses
+                     WHERE scope_type = 'hall' AND scope_id = ?) AS expenses""",
+            (hall_id, hall_id, hall_id, hall_id, hall_id))
+        n_book = int(counts["bookings"])
+        n_quot = int(counts["quotations"])
+        n_hist = int(counts["history"])
+        n_exp = int(counts["expenses"])
+        if n_book or n_quot or n_hist or n_exp:
+            raise HallDeleteBlockedError(
+                hall["name"], bookings=n_book, quotations=n_quot,
+                history=n_hist, expenses=n_exp)
+        with self.db.transaction() as conn:
+            conn.execute("DELETE FROM hall_weekly_hours WHERE hall_id = ?",
+                         (hall_id,))
+            conn.execute("DELETE FROM hall_special_hours WHERE hall_id = ?",
+                         (hall_id,))
+            conn.execute("DELETE FROM maintenance_blocks WHERE hall_id = ?",
+                         (hall_id,))
+            conn.execute("DELETE FROM package_halls WHERE hall_id = ?",
+                         (hall_id,))
+            conn.execute("DELETE FROM service_halls WHERE hall_id = ?",
+                         (hall_id,))
+            conn.execute("DELETE FROM pricing_rules WHERE hall_id = ?",
+                         (hall_id,))
+            conn.execute("DELETE FROM halls WHERE id = ?", (hall_id,))
+            audit_service.record(
+                self.db, employee_id=employee.id, action="hall.deleted",
+                entity_type="hall", entity_id=hall_id,
+                old_value={"name": hall["name"],
+                           "capacity": hall["capacity"]},
+                description=f"Hall '{hall['name']}' permanently deleted.",
+                conn=conn,
+            )
+        logger.info("Hall deleted: id=%s name=%s", hall_id, hall["name"])
+        return hall["name"]
 
     # -- weekly hours ------------------------------------------------------
     def list_weekly_hours(self, employee, hall_id: int) -> list[HallWeeklyHours]:
